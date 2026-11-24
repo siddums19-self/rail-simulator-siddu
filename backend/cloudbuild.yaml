@@ -1,0 +1,54 @@
+# Backend: build the Spring Boot image and deploy it to Cloud Run (rail-simulator-be).
+# Run from the repo root:
+#   gcloud builds submit backend --config backend/cloudbuild.yaml
+substitutions:
+  _REGION: asia-south1
+  _REPO: railsim-repo
+  _SERVICE: rail-simulator-be
+  _SQL_INSTANCE: rail-simulator      # Cloud SQL instance id (its region is looked up at deploy time)
+  _DB_NAME: railsim
+  _DB_USER: postgres
+  _DB_SECRET: railsim-db-password                             # Secret Manager secret
+  _RUN_SA: 744714946530-compute@developer.gserviceaccount.com
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:latest
+      - .
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}"]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        # project:region:instance, whatever region the instance is in
+        CONN=$$(gcloud sql instances describe ${_SQL_INSTANCE} --format='value(connectionName)')
+        echo "Cloud SQL connection: $$CONN"
+        gcloud run deploy ${_SERVICE} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID \
+          --region=${_REGION} \
+          --service-account=${_RUN_SA} \
+          --allow-unauthenticated \
+          --add-cloudsql-instances=$$CONN \
+          --update-env-vars="DB_URL=jdbc:postgresql:///${_DB_NAME}?cloudSqlInstance=$$CONN&socketFactory=com.google.cloud.sql.postgres.SocketFactory,DB_USER=${_DB_USER},GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
+          --update-secrets=RAILSIM-DB-PASSWORD=${_DB_SECRET}:latest \
+          --memory=1Gi --cpu=1 --cpu-boost \
+          --min-instances=0 --max-instances=2
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID

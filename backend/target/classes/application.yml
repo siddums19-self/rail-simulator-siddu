@@ -1,0 +1,27 @@
+server:
+  port: ${PORT:9010}
+  error:
+    include-message: always # login/signup forms show the reason
+
+spring:
+  application:
+    name: indian-rail-sim-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5438/railsim}
+    username: ${DB_USER:railsim_user}
+    password: ${DB_PASS:railsim_pass}
+    hikari:
+      maximum-pool-size: ${DB_POOL:4} # db-f1-micro allows ~25 connections in total
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+railsim:
+  tts:
+    enabled: ${TTS_ENABLED:true}
+    female-voice: ${TTS_FEMALE_VOICE:en-IN-Neural2-A}
+    male-voice: ${TTS_MALE_VOICE:en-IN-Neural2-B}
+    quota-project: ${GOOGLE_CLOUD_PROJECT:railsimulator-190291}

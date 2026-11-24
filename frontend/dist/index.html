@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Indian Railways 3D Simulator v6</title>
+  <style>
+    :root {
+      --panel: rgba(10, 16, 28, 0.78);
+      --line: rgba(148, 163, 184, 0.22);
+      --text: #e8eef6;
+      --muted: #93a4b8;
+      --accent: #f5c518;
+      --blue: #3b82f6;
+      --green: #22c55e;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { overflow: hidden; background: #05080f; color: var(--text); }
+    canvas { display: block; touch-action: none; }
+    #loader { position: fixed; inset: 0; z-index: 99; background: radial-gradient(circle at 50% 40%, #13213a, #05080f 70%);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; transition: opacity .5s; }
+    #loader h1 { font-size: 22px; letter-spacing: 3px; font-weight: 800; }
+    #loader .bar { width: 320px; height: 4px; background: #1e293b; border-radius: 4px; overflow: hidden; }
+    #loader .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+    #loader-msg { color: var(--muted); font-size: 13px; }
+    .panel { background: var(--panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line);
+      border-radius: 12px; padding: 10px 14px; pointer-events: auto; font-size: 12.5px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    .hud { position: fixed; pointer-events: none; z-index: 10; display: flex; gap: 10px; }
+    #top { top: 12px; left: 12px; right: 12px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
+    #bottom { bottom: 12px; left: 12px; right: 12px; justify-content: space-between; align-items: flex-end; }
+    button, select { background: #1b2638; color: var(--text); border: 1px solid #34465f; border-radius: 7px; padding: 6px 10px;
+      cursor: pointer; font-size: 12px; }
+    button:hover { background: #26354d; }
+    button.primary { background: var(--blue); border-color: #60a5fa; font-weight: 600; }
+    button.on { background: #15803d; border-color: #22c55e; }
+    button.preset { background: #0f766e; border-color: #14b8a6; font-size: 11px; padding: 5px 8px; }
+    .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 7px; }
+    .muted { color: var(--muted); }
+    .title { font-weight: 700; font-size: 14px; }
+    .badge { padding: 2px 7px; border-radius: 5px; background: #0f766e; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; }
+    /* signal */
+    #sig { display: flex; gap: 12px; align-items: center; }
+    .lamps { display: flex; flex-direction: column; gap: 4px; background: #000; padding: 6px; border-radius: 14px; border: 2px solid #222; }
+    .lamp { width: 13px; height: 13px; border-radius: 50%; background: #1d232b; }
+    .lamp.red { background: var(--red); box-shadow: 0 0 10px var(--red); }
+    .lamp.yellow { background: #fbbf24; box-shadow: 0 0 10px #fbbf24; }
+    .lamp.green { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    #feather { font-size: 11px; color: #fde68a; }
+    /* speedo */
+    #speedo .big { font-size: 30px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    #speedo .unit { font-size: 12px; color: var(--muted); }
+    #speedbar { height: 6px; background: #1e293b; border-radius: 4px; margin-top: 6px; position: relative; overflow: hidden; width: 230px; }
+    #speedbar i { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, #22c55e, #eab308, #ef4444); width: 0; }
+    #speedbar b { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #fff; }
+    .kv { display: grid; grid-template-columns: auto auto auto auto; gap: 1px 10px; margin-top: 4px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+    #speedo { padding: 8px 12px; }
+    #speedbar { width: 260px !important; margin-top: 4px !important; }
+    .kv span:nth-child(odd) { color: var(--muted); }
+    /* strip map */
+    #strip { flex: 1; max-width: 760px; align-self: flex-end; padding: 8px 14px; display: flex; flex-direction: column; justify-content: center; }
+    #strip-track { position: relative; height: 34px; margin-top: 4px; }
+    #strip-track .ln { position: absolute; left: 0; right: 0; top: 16px; height: 3px; background: #334155; border-radius: 3px; }
+    #strip-track .done { position: absolute; left: 0; top: 16px; height: 3px; background: var(--accent); border-radius: 3px; }
+    #strip-track .st { position: absolute; top: 11px; width: 2px; height: 13px; background: #64748b; }
+    #strip-track .st.halt { background: #e2e8f0; width: 4px; border-radius: 2px; }
+    #strip-track .st label { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+    #strip-track .me { position: absolute; top: 9px; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 10px solid var(--accent); transform: translateX(-7px); }
+    /* platform selector */
+    #pf-panel { position: fixed; right: 12px; top: 176px; width: 228px; display: none; z-index: 12; padding: 8px 10px !important; }
+    #pf-panel .title { font-size: 12.5px; }
+    #pf-sub { font-size: 10.5px; line-height: 1.3; }
+    #pf-list { display: grid; grid-template-columns: 1fr; gap: 3px; margin-top: 5px; max-height: 34vh; overflow-y: auto; }
+    .pf { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 3px 7px; border-radius: 6px; border: 1px solid #2c3b52; background: #121b2a; font-size: 11px; }
+    .pf.free { cursor: pointer; border-color: #1f7a45; }
+    .pf.free:hover { background: #163023; }
+    .pf.sel { background: #14532d; border-color: #4ade80; }
+    .pf.occ { opacity: .55; cursor: not-allowed; }
+    .pf b { font-size: 11.5px; white-space: nowrap; }
+    .pf small { font-size: 10px; text-align: right; }
+    .pf small { color: var(--muted); }
+    #pf-lock { font-size: 10px; color: #fca5a5; margin-top: 4px; }
+    /* route builder */
+    #route-modal { position: fixed; top: 92px; left: 12px; width: 440px; max-height: 76vh; overflow-y: auto; display: none; z-index: 20; }
+    #solved { margin-top: 10px; font-size: 11.5px; color: #cbd5e1; line-height: 1.55; }
+    #toast { position: fixed; top: 96px; left: 50%; transform: translateX(-50%); z-index: 30; display: none; padding: 9px 18px;
+      border-radius: 10px; font-weight: 700; font-size: 13px; background: rgba(15,23,42,.92); border: 1px solid #475569; }
+    #toast.warn { background: rgba(153,27,27,.94); border-color: #fca5a5; }
+    #toast.ok { background: rgba(20,83,45,.94); border-color: #86efac; }
+    #hint { position: fixed; bottom: 112px; left: 50%; transform: translateX(-50%); font-size: 11px; color: #cbd5e1; z-index: 9;
+      background: rgba(5,8,15,.55); padding: 4px 12px; border-radius: 20px; pointer-events: none; white-space: nowrap; }
+    #controls .row { margin-top: 0; }
+    #stops-panel { position: fixed; top: 92px; left: 12px; width: 440px; max-height: 70vh; overflow-y: auto; display: none; z-index: 21; }
+    .stop-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid rgba(148,163,184,.12); font-size: 12px; }
+    .stop-row label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+    .stop-row select { padding: 3px 6px; }
+    #dash { position: fixed; left: 50%; bottom: 118px; transform: translateX(-50%); z-index: 9; display: none; width: min(980px, 96vw); pointer-events: none; }
+    #engine-panel { position: fixed; right: 12px; top: 460px; width: 300px; display: none; z-index: 12; }
+    #tt-panel { position: fixed; top: 92px; left: 12px; width: 520px; max-height: 72vh; overflow-y: auto; display: none; z-index: 21; }
+    #tt { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+    #tt th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 4px; }
+    #tt td { padding: 4px; border-bottom: 1px solid rgba(148,163,184,.1); }
+    #tt tr.done td { color: #64748b; }
+    .modal { position: fixed; inset: 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+    .modal canvas { max-width: 92vw; height: auto; border-radius: 8px; }
+    #sum-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+    #sum-stats div { display: flex; flex-direction: column; background: #111a29; padding: 8px 10px; border-radius: 8px; }
+    #incident { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(60,0,0,.25); }
+    #controls button { min-width: 64px; }
+    #horn-btn { background: #92400e; border-color: #f59e0b; font-weight: 700; }
+    #campad { position: fixed; right: 12px; bottom: 128px; z-index: 11; padding: 8px; display: grid;
+      grid-template-columns: repeat(3, 34px); gap: 4px; }
+    #campad button { width: 34px; height: 30px; padding: 0; font-size: 15px; touch-action: none; user-select: none; }
+    #campad .lbl { grid-column: 1 / 4; text-align: center; font-size: 10px; color: var(--muted); }
+    /* login / guest screen (above the loader, the sim loads behind it) */
+    #auth { position: fixed; inset: 0; z-index: 120; display: none; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 50% 35%, #13213a, #05080f 70%); padding: 16px; }
+    #auth .card { width: 360px; max-width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
+    #auth h1 { font-size: 17px; letter-spacing: 2px; font-weight: 800; text-align: center; }
+    #auth .tabs { display: flex; gap: 6px; margin: 16px 0 12px; }
+    #auth .tabs button { flex: 1; }
+    #auth .tabs button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+    #auth label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+    #auth input { width: 100%; padding: 9px 10px; border-radius: 7px; border: 1px solid var(--line); background: #0b1322; color: var(--text); font-size: 14px; }
+    #auth input:focus { outline: 2px solid var(--blue); outline-offset: 0; }
+    #auth .go { width: 100%; margin-top: 14px; padding: 10px; font-weight: 700; }
+    #auth .err { color: var(--red); font-size: 12.5px; min-height: 18px; margin-top: 8px; }
+    #auth .or { text-align: center; color: var(--muted); font-size: 12px; margin: 12px 0 8px; }
+    #auth .guest { width: 100%; padding: 9px; }
+    #user-chip { font-size: 12px; }
+    #career-panel .rankbar { height: 8px; background: #1e293b; border-radius: 6px; overflow: hidden; margin: 6px 0 2px; }
+    #career-panel .rankbar i { display: block; height: 100%; background: var(--accent); }
+    #career-panel .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+    #career-panel .grid div { background: rgba(255,255,255,.04); border-radius: 8px; padding: 8px; }
+    #career-panel .grid b { display: block; font-size: 16px; }
+    #career-panel table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+    #career-panel td, #career-panel th { padding: 4px; border-bottom: 1px solid var(--line); text-align: left; }
+    @media (max-width: 900px) { #strip { display: none; } #hint { display: none; } #route-modal { width: calc(100vw - 24px); } }
+  </style>
+  <script type="module" crossorigin src="/assets/index-CzEtmp9C.js"></script>
+</head>
+<body>
+  <div id="auth" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+    <div class="card">
+      <h1 id="auth-title">INDIAN RAILWAYS 3D SIMULATOR</h1>
+      <div class="muted" style="text-align:center;font-size:12.5px;margin-top:6px;">Log in to save your career, or drive as a guest.</div>
+      <div class="tabs"><button type="button" id="auth-tab-login" class="on">Log in</button><button type="button" id="auth-tab-signup">Sign up</button></div>
+      <form id="auth-form" novalidate>
+        <label for="auth-email">Email</label>
+        <input id="auth-email" type="email" autocomplete="email" placeholder="you@example.com" required>
+        <label for="auth-pass">Password</label>
+        <input id="auth-pass" type="password" autocomplete="current-password" required>
+        <button class="primary go" id="auth-go" type="submit">Log in</button>
+        <div class="err" id="auth-err" role="alert"></div>
+      </form>
+      <div class="or">or</div>
+      <button type="button" class="guest" id="auth-guest">Continue as guest</button>
+      <div class="muted" style="font-size:11px;text-align:center;margin-top:8px;">Guest progress is not saved.</div>
+    </div>
+  </div>
+
+  <div id="loader">
+    <h1>INDIAN RAILWAYS 3D SIMULATOR</h1>
+    <div class="bar"><i id="loader-bar"></i></div>
+    <div id="loader-msg">Initialising renderer…</div>
+  </div>
+
+  <div id="top" class="hud">
+    <div class="panel" style="max-width: 520px;">
+      <div class="title" id="route-title">Loading route…</div>
+      <div class="muted" id="route-meta" style="margin-top:2px;"></div>
+      <div class="row">
+        <button class="primary" id="btn-builder">Route &amp; Roster</button>
+        <button id="btn-reverse" title="Swap source and destination">Reverse route</button>
+        <button id="btn-auto" title="Auto driver (A)">Auto drive</button>
+        <button id="btn-stops" title="Choose halts and dwell times">Stops</button>
+        <button id="btn-timetable" title="Working timetable">Timetable</button>
+        <button id="btn-recorder" title="Speed recorder chart">Recorder</button>
+        <button id="btn-kavach" class="on" title="Kavach automatic train protection">Kavach</button>
+        <button id="btn-busy" class="on" title="Congested stations hold the home signal">Busy stns</button>
+        <button id="btn-lights" title="Headlight: Auto (dark / fog / rain), On or Off — key L">Lights: Auto</button>
+        <button id="btn-wipers" title="Windscreen wipers: Auto (rain), On or Off — key I">Wipers: Auto</button>
+ <button id="btn-career" title="Career: rank, XP and run history">Career</button>
+        <button id="user-chip" title="Account">Guest · Log in</button>
+        <button id="btn-derail" title="Realistic derailment on gross overspeed over points and curves (off = penalty + heavy lurch only)">Derail: off</button>
+        <span class="badge" id="backend-badge">…</span>
+      </div>
+    </div>
+
+    <div class="panel" id="sig">
+      <div class="lamps"><div class="lamp" id="lamp-y2"></div><div class="lamp" id="lamp-g"></div><div class="lamp" id="lamp-y1"></div><div class="lamp" id="lamp-r"></div></div>
+      <div>
+        <div class="muted" style="font-size:10.5px;" id="sig-name">NEXT SIGNAL</div>
+        <div style="font-weight:800;font-size:15px;" id="sig-aspect">—</div>
+        <div id="feather">&nbsp;</div>
+        <div class="muted" id="sig-dist" style="font-size:11px;"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div><b id="clock">07:15</b> <span class="muted">journey time</span></div>
+      <div class="row">
+        <select id="sel-weather" title="Weather">
+          <option value="CLEAR">Clear sun</option>
+          <option value="HAZE">Summer haze</option>
+          <option value="MONSOON">Monsoon rain</option>
+          <option value="FOG">Winter fog</option>
+        </select>
+        <select id="sel-time" title="Jump to time">
+          <option value="">Time…</option>
+          <option value="330">05:30 Dawn</option>
+          <option value="435">07:15 Morning</option>
+          <option value="720">12:00 Noon</option>
+          <option value="1065">17:45 Golden hour</option>
+          <option value="1170">19:30 Dusk</option>
+          <option value="1350">22:30 Night</option>
+        </select>
+      </div>
+      <div class="row">
+        <select id="sel-cam" title="Camera (1-7, C to cycle)"></select>
+        <select id="sel-quality" title="Graphics quality">
+          <option value="ultra">Ultra</option>
+          <option value="high" selected>High</option>
+          <option value="medium">Medium</option>
+        </select>
+      </div>
+      <div class="row">
+        <select id="sel-rate" title="Simulation speed">
+          <option value="1">Sim 1×</option>
+          <option value="2">Sim 2×</option>
+          <option value="5">Sim 5×</option>
+          <option value="10">Sim 10×</option>
+        </select>
+        <select id="sel-scale" title="Distance scale between stations (restarts the route)">
+          <option value="1">Exact 1:1</option>
+          <option value="10">Compact 1:10</option>
+        </select>
+        <button id="btn-sound" class="on">Sound</button>
+        <button id="btn-announce" class="on" title="Station announcements">Announce</button>
+        <button id="btn-voice" title="Announcer voice: Google Cloud natural en-IN voice (via the backend) or the browser's built-in voice">Voice: Browser</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pf-panel" class="panel">
+    <div class="title" id="pf-title">Platform entry</div>
+    <div class="muted" id="pf-sub" style="margin-top:2px;"></div>
+    <div id="pf-list"></div>
+    <div id="pf-lock"></div>
+  </div>
+
+  <div id="route-modal" class="panel">
+    <div class="title">Source → Destination Route &amp; Roster Builder</div>
+    <div class="row">
+      <button class="preset" data-preset="gtl-sc">GTL → SC Express via Dhone, Kurnool, Kacheguda</button>
+      <button class="preset" data-preset="gtl-krnt">GTL → KRNT Express (Dhone diversion)</button>
+      <button class="preset" data-preset="gtl-krnt-pass">77414 GTL → KRNT Passenger</button>
+      <button class="preset" data-preset="krnt-gtl">KRNT → GTL (VV Nagar on left)</button>
+      <button class="preset" data-preset="atp-krnt">ATP → KRNT via GTL (engine reversal)</button>
+      <button class="preset" data-preset="tpty-rc-wadi">TPTY → HYB via Raichur &amp; Wadi</button>
+      <button class="preset" data-preset="tpty-krnt">TPTY → HYB via Kurnool</button>
+      <button class="preset" data-preset="sbc-gtl">SBC → GTL (Deccan)</button>
+      <button class="preset" data-preset="mas-bza">MAS → BZA (Coastal)</button>
+      <button class="preset" data-preset="wadi-csmt">WADI → CSMT (Ghats)</button>
+    </div>
+    <div class="row"><span class="muted">Saved roster</span><select id="sel-roster" style="flex:1;"><option value="">— Load from PostgreSQL —</option></select></div>
+    <div class="row"><span class="muted">From</span><select id="sel-src"></select><span class="muted">To</span><select id="sel-dst"></select></div>
+    <div class="row"><span class="muted">Via</span>
+      <select id="sel-via">
+        <option value="">Auto shortest</option>
+        <option value="GTL,RC,WADI">GTL, RC, WADI (Rayalaseema)</option>
+        <option value="GTL,KRNT">GTL, KRNT (Kurnool line)</option>
+        <option value="DHNE">DHNE (Dhone diversion)</option>
+      </select>
+    </div>
+    <div class="row"><span class="muted">Train</span>
+      <select id="sel-rake">
+        <option value="VANDE_BHARAT">Vande Bharat EMU (160 km/h)</option>
+        <option value="LHB" selected>WAP-7 + LHB Express (130 km/h)</option>
+        <option value="ICF">WDP-4D + ICF Express (110 km/h)</option>
+        <option value="RAJDHANI">WAP-7 + Rajdhani Express (130 km/h)</option>
+        <option value="DURANTO">WAP-7 + Duranto Express (130 km/h)</option>
+        <option value="DEMU_PASSENGER">DEMU Local Passenger (90 km/h, all stops)</option>
+        <option value="BOXN_GOODS">WAG-12B + BOXN Goods (75 km/h)</option>
+      </select>
+    </div>
+    <div class="row">
+      <button class="primary" id="btn-solve">Build live route</button>
+      <button id="btn-save">Save to PostgreSQL</button>
+    </div>
+    <div id="solved"></div>
+  </div>
+
+  <div id="toast"></div>
+  <canvas id="dash" width="980" height="190"></canvas>
+  <div id="engine-panel" class="panel">
+    <div class="title" id="engine-title">Engine change</div>
+    <div class="muted" id="engine-sub" style="margin-top:2px;"></div>
+    <div class="row"><select id="engine-select"></select><button class="primary" id="btn-engine">Detach &amp; attach engine</button></div>
+  </div>
+  <div id="tt-panel" class="panel">
+    <div class="title">Working timetable</div>
+    <div class="muted" id="tt-sub" style="margin-top:2px;"></div>
+    <table id="tt"><thead><tr><th>Station</th><th>Arr</th><th>Dep</th><th>Halt</th><th>Status</th></tr></thead><tbody id="tt-body"></tbody></table>
+  </div>
+  <div id="rec-panel" class="modal"><div class="panel"><canvas id="rec-chart" width="900" height="300"></canvas><div class="row" style="justify-content:flex-end;"><button id="rec-close">Close</button></div></div></div>
+  <div id="summary" class="modal">
+    <div class="panel" style="max-width:960px;">
+      <div class="title" style="font-size:18px;">Journey summary</div>
+      <div id="sum-stats"></div>
+      <canvas id="sum-chart" width="900" height="260" style="margin-top:10px;"></canvas>
+      <div id="sum-events" class="muted" style="font-size:11.5px;margin-top:6px;max-height:120px;overflow:auto;"></div>
+      <div class="row" style="justify-content:flex-end;"><button id="sum-close">Close</button><button class="primary" id="sum-restart">Drive again</button></div>
+    </div>
+  </div>
+  <div id="career-modal" class="modal">
+    <div class="panel" id="career-panel" style="width:520px;max-width:94vw;max-height:86vh;overflow:auto;">
+      <div class="title" style="font-size:18px;">Career</div>
+      <div class="muted" id="car-who" style="margin-top:2px;"></div>
+      <div style="margin-top:12px;"><b id="car-rank"></b> <span class="muted" id="car-duty"></span></div>
+      <div class="rankbar"><i id="car-bar"></i></div>
+      <div class="muted" id="car-next" style="font-size:12px;"></div>
+      <div class="grid" id="car-grid"></div>
+      <table><thead><tr><th>Run</th><th>Train</th><th>km</th><th>Result</th><th>XP</th></tr></thead><tbody id="car-hist"></tbody></table>
+      <div class="muted" style="font-size:11px;margin-top:8px;">XP: 2 per km driven; finishing a run +100; on time +100 (within 10 min +40); score ÷ 10; −50 per SPAD; −150 for a collision or derailment.</div>
+      <div class="row" style="justify-content:flex-end;"><button id="car-close">Close</button></div>
+    </div>
+  </div>
+  <div id="stops-panel" class="panel">
+    <div class="title">Stops &amp; dwell times</div>
+    <div class="muted" style="margin-top:2px;">Tick a station to halt there and choose how long (journey-clock minutes; the clock runs 8× while standing). Defaults: metros 10 min, big junctions such as Guntakal 5 min, other stations 1 min.</div>
+    <div id="stops-list"></div>
+  </div>
+  <div id="incident">
+    <div class="panel" style="text-align:center;max-width:520px;">
+      <div id="incident-title" style="font-size:26px;font-weight:900;color:#fca5a5;letter-spacing:2px;">COLLISION</div>
+      <div id="incident-reason" style="margin-top:8px;font-size:14px;"></div>
+      <div class="muted" style="margin-top:8px;font-size:12px;">Overspeeding through turnouts, loops or curves derails the train; passing a red signal without Kavach can lead to a collision.</div>
+      <div class="row" style="justify-content:center;margin-top:14px;">
+        <button class="primary" id="btn-resume">Resume from last station</button>
+        <button id="btn-restart">Restart route</button>
+      </div>
+    </div>
+  </div>
+  <div id="hint">Mouse: drag orbit · right-drag pan · wheel zoom &nbsp;|&nbsp; Trackpad: 2-finger swipe orbit · pinch zoom · Shift+swipe pan &nbsp;|&nbsp; Keys: ←↑→↓ orbit · Shift+arrows pan · +/− zoom · 1–9 / C cameras (1 front · 8 guard · 9 crew · V swap) · W/S throttle · Space brake · H horn · A auto</div>
+  <div id="campad" class="panel" title="Camera: hold a button">
+    <div class="lbl">CAMERA</div>
+    <button data-cam="in" title="Zoom in">＋</button><button data-cam="up" title="Tilt up">▲</button><button data-cam="out" title="Zoom out">－</button>
+    <button data-cam="left" title="Orbit left">⟲</button><button data-cam="reset" title="Reset view">◎</button><button data-cam="right" title="Orbit right">⟳</button>
+    <button data-cam="panL" title="Pan left">◀</button><button data-cam="down" title="Tilt down">▼</button><button data-cam="panR" title="Pan right">▶</button>
+    <button data-cam="panU" title="Pan up" style="grid-column:1 / 2;">⤒</button><span></span><button data-cam="panD" title="Pan down">⤓</button>
+  </div>
+
+  <div id="bottom" class="hud">
+    <div class="panel" id="speedo">
+      <div><span class="big" id="speed">0</span> <span class="unit">km/h</span> <span class="muted" style="margin-left:8px;">limit <b id="limit">—</b></span></div>
+      <div class="muted" id="next-limit" style="font-size:11px;min-height:14px;"></div>
+      <div id="speedbar"><i id="speedfill"></i><b id="speedlim"></b></div>
+      <div class="kv">
+        <span>Notch</span><b id="notch">N0</b>
+        <span>Brake</span><b id="brake">0%</b>
+        <span>Odometer</span><b id="odo">0.0 km</b>
+        <span>Section</span><b id="section">—</b>
+        <span>Kavach</span><b id="kavach-state">ON</b>
+        <span>SPADs</span><b id="spads">0</b>
+        <span>Score</span><b id="score">0</b>
+      </div>
+    </div>
+    <div class="panel" id="strip">
+      <div style="display:flex;justify-content:space-between;gap:10px;"><b id="next-st">—</b><span><b id="delay" style="margin-right:10px;">On time</b><span class="muted" id="next-dist"></span></span></div>
+      <div id="strip-track"><div class="ln"></div><div class="done" id="strip-done"></div><div class="me" id="strip-me"></div></div>
+    </div>
+    <div class="panel" id="controls">
+      <div class="row">
+        <button id="btn-up">Throttle + (W)</button>
+        <button id="btn-dn">Throttle − (S)</button>
+      </div>
+      <div class="row" style="margin-top:6px;">
+        <button id="btn-brk">Brake (Space)</button>
+        <button id="btn-rel">Release (R)</button>
+        <button id="btn-emg" style="background:#7f1d1d;border-color:#ef4444;">EMG (E)</button>
+        <button id="horn-btn">HORN (H)</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

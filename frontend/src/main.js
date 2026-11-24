@@ -1,1343 +1,1195 @@
 import * as THREE from 'three/webgpu';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { loadStationManifest } from './world/stationModels.js';
+import { animateCrew, animateWipers } from './trains/cabInterior.js';
+import { pass } from 'three/tsl';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { API_BASE, RAKES, QUALITY, TRACK } from './config.js';
+import { setMaxAnisotropy } from './core/textures.js';
+import { updateNightEmissives } from './core/materials.js';
+import { buildRouteLayout } from './route/layout.js';
+import { solveOffline, OFFLINE_HUBS, applyOverrides } from './route/offlineSolver.js';
+import { World } from './world/world.js';
+import { SkySystem } from './world/sky.js';
+import { Consist, setupGltf, LOCOS, isMultipleUnit, defaultLoco } from './trains/consist.js';
+import { Timetable, fmtClock } from './timetable.js';
+import { Scorer } from './score.js';
+import { drawDashboard, drawRecorder } from './ui/dashboard.js';
+import { StationAudio } from './audio/stationAudio.js';
+import { spokenName } from './route/stationScripts.js';
+import { AudioEngine } from './audio/audioEngine.js';
+import { CameraRig, CAMERA_MODES } from './ui/cameraRig.js';
+import { Operations, Traffic, LOOP_LIMIT } from './ops.js';
+import { preloadPassengerGlb } from './world/people.js';
+import { Account, rankOf } from './ui/career.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080/api';
-const ASSETS_BASE = import.meta.env.VITE_ASSETS_BASE || '';
+const $ = (id) => document.getElementById(id);
+const loader = {
+  set(msg, pct) { $('loader-msg').textContent = msg; if (pct !== undefined) $('loader-bar').style.width = `${pct}%`; },
+  show() { const el = $('loader'); el.style.display = 'flex'; el.style.opacity = '1'; },
+  hide() { const el = $('loader'); el.style.opacity = '0'; setTimeout(() => { el.style.display = 'none'; }, 500); }
+};
+const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
-// =========================================================================
-// 1. HIGH-GRAPHICS WEBGPU RENDERER + ACES FILMIC TONE MAPPING + SHADOWS
-// =========================================================================
-const renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
+// ======================================================================
+// Renderer, scene, post-processing
+// ======================================================================
+const params = new URLSearchParams(location.search);
+let qualityKey = params.get('q') || localStorageGet('railsim.quality') || 'high';
+let Q = QUALITY[qualityKey] || QUALITY.high;
+
+const renderer = new THREE.WebGPURenderer({ antialias: !Q.post, powerPreference: 'high-performance', forceWebGL: params.has('webgl') });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, Q.pixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.65;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.appendChild(renderer.domElement);
-
+loader.set('Initialising WebGPU…', 5);
 await renderer.init();
+const isWebGPU = !!renderer.backend?.isWebGPUBackend;
+setMaxAnisotropy(renderer.getMaxAnisotropy ? renderer.getMaxAnisotropy() : 8);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x7db9e8);
-scene.fog = new THREE.FogExp2(0x9ec5e5, 0.00038);
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 7000);
+const sky = new SkySystem(renderer, scene);
+sky.setShadowSize(Q.shadow);
 
-const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.25, 3800);
+const ktx2 = new KTX2Loader();
+ktx2.setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/libs/basis/');
+try { ktx2.detectSupport(renderer); } catch { /* optional */ }
+setupGltf(renderer, ktx2);
+
+let pipeline = null, bloomNode = null;
+function setupPost() {
+  pipeline = null;
+  if (!Q.post) return;
+  try {
+    pipeline = new THREE.RenderPipeline(renderer);
+    const scenePass = pass(scene, camera, { samples: Q.samples });
+    const color = scenePass.getTextureNode('output');
+    bloomNode = bloom(color, 0.22, 0.4, 1.1);
+    pipeline.outputNode = color.add(bloomNode);
+  } catch (e) {
+    console.warn('Post-processing unavailable, rendering direct.', e);
+    pipeline = null;
+  }
+}
+setupPost();
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// =========================================================================
-// 2. GLTF + DRACO + KTX2 + MESHOPT + HDRI ENVIRONMENT PIPELINE
-// =========================================================================
-const dracoLoader = new DRACOLoader();
-dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
-
-const ktx2Loader = new KTX2Loader();
-ktx2Loader.setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/libs/basis/');
-ktx2Loader.detectSupport(renderer);
-
-const gltfLoader = new GLTFLoader();
-gltfLoader.setDRACOLoader(dracoLoader);
-gltfLoader.setKTX2Loader(ktx2Loader);
-gltfLoader.setMeshoptDecoder(MeshoptDecoder);
-
-// PBR Environment Map: Instant RoomEnvironment baseline + optional custom HDRI sky.hdr
-const pmrem = new THREE.PMREMGenerator(renderer);
-const roomEnv = new RoomEnvironment();
-const fallbackEnv = pmrem.fromScene(roomEnv, 0.04).texture;
-scene.environment = fallbackEnv;
-scene.environmentIntensity = 0.65;
-roomEnv.dispose();
-pmrem.dispose();
-
-const hdrUrl = `${ASSETS_BASE}/env/sky.hdr`;
-const hdrLoader = new HDRLoader();
-hdrLoader.load(
-  hdrUrl,
-  (hdrTex) => {
-    hdrTex.mapping = THREE.EquirectangularReflectionMapping;
-    scene.environment = hdrTex;
-    scene.background = hdrTex;
-    scene.environmentIntensity = 0.85;
-  },
-  undefined,
-  () => { /* keep procedural 24-hour sky + RoomEnvironment PBR reflections */ }
-);
-
-// Dynamic Sun Light with crisp 2048x2048 shadow frustum tracking the train
-const sunLight = new THREE.DirectionalLight(0xfff5e4, 2.8);
-sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(2048, 2048);
-sunLight.shadow.camera.near = 5;
-sunLight.shadow.camera.far = 420;
-sunLight.shadow.camera.left = -120;
-sunLight.shadow.camera.right = 120;
-sunLight.shadow.camera.top = 120;
-sunLight.shadow.camera.bottom = -120;
-sunLight.shadow.bias = -0.0004;
-scene.add(sunLight);
-scene.add(sunLight.target);
-
-const hemiLight = new THREE.HemisphereLight(0xbbe0ff, 0x6b533b, 0.8);
-scene.add(hemiLight);
-
-// =========================================================================
-// 3. PROCEDURAL HIGH-RES PBR TEXTURE SYNTHESIS (ZERO-DOWNLOAD FALLBACKS)
-// =========================================================================
-function makeProceduralBallastTexture() {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 512;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#5a5550';
-  ctx.fillRect(0, 0, 512, 512);
-  // Crushed granite gravel stones
-  for (let i = 0; i < 6500; i++) {
-    const x = Math.random() * 512, y = Math.random() * 512;
-    const s = 2 + Math.random() * 5;
-    const shade = 65 + Math.floor(Math.random() * 65);
-    ctx.fillStyle = `rgb(${shade},${shade - 3},${shade - 6})`;
-    ctx.fillRect(x, y, s, s * 0.8);
+// Monsoon rain streaks (instanced quads around the camera)
+const rain = (() => {
+  const n = 3200;
+  const geo = new THREE.PlaneGeometry(0.018, 0.75);
+  const mat = new THREE.MeshBasicMaterial({ color: 0xc9d6e3, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
+  const mesh = new THREE.InstancedMesh(geo, mat, n);
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < n; i++) {
+    m.makeRotationY(Math.random() * Math.PI);
+    m.setPosition((Math.random() - 0.5) * 70, Math.random() * 40, (Math.random() - 0.5) * 70);
+    mesh.setMatrixAt(i, m);
   }
-  // PSC Concrete Sleepers every 64px
-  for (let y = 16; y < 512; y += 64) {
-    ctx.fillStyle = '#9ca3af';
-    ctx.fillRect(42, y, 428, 20);
-    ctx.fillStyle = '#6b7280';
-    ctx.fillRect(42, y + 17, 428, 4);
-    // Pandrol rail clips
-    ctx.fillStyle = '#374151';
-    ctx.fillRect(145, y + 4, 24, 12);
-    ctx.fillRect(343, y + 4, 24, 12);
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.anisotropy = 8;
-  return tex;
-}
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  scene.add(mesh);
+  return mesh;
+})();
 
-function makePlatformTileTexture() {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 512;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillRect(0, 0, 512, 512);
-  // Granite paving tiles
-  for (let y = 0; y < 512; y += 32) {
-    for (let x = 0; x < 512; x += 32) {
-      const v = 138 + Math.floor(Math.random() * 24);
-      ctx.fillStyle = `rgb(${v},${v + 4},${v + 8})`;
-      ctx.fillRect(x + 1, y + 1, 30, 30);
-    }
-  }
-  // Iconic Indian Railways yellow tactile safety strips on both platform edges
-  ctx.fillStyle = '#eab308';
-  ctx.fillRect(16, 0, 22, 512);
-  ctx.fillRect(474, 0, 22, 512);
-  ctx.fillStyle = '#1e293b';
-  ctx.fillRect(0, 0, 14, 512);
-  ctx.fillRect(498, 0, 14, 512);
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(1, 24);
-  tex.anisotropy = 8;
-  return tex;
-}
-
-function makeCorrugatedRoofTexture() {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 256;
-  const ctx = c.getContext('2d');
-  for (let x = 0; x < 256; x += 8) {
-    ctx.fillStyle = (x % 16 === 0) ? '#1e3a5f' : '#2b4f7c';
-    ctx.fillRect(x, 0, 8, 256);
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(3, 18);
-  return tex;
-}
-
-function makeDeccanTerrainTexture() {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 512;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#8b6848';
-  ctx.fillRect(0, 0, 512, 512);
-  for (let i = 0; i < 4500; i++) {
-    const x = Math.random() * 512, y = Math.random() * 512;
-    const r = 3 + Math.random() * 14;
-    ctx.fillStyle = Math.random() > 0.35 ? 'rgba(118,86,54,0.35)' : 'rgba(92,115,62,0.32)';
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(140, 360);
-  tex.anisotropy = 4;
-  return tex;
-}
-
-function makeCoachSideTexture(bodyHex, stripeHex, isFreight = false) {
-  const c = document.createElement('canvas');
-  c.width = 1024; c.height = 256;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = bodyHex;
-  ctx.fillRect(0, 0, 1024, 256);
-
-  if (isFreight) {
-    // Ribbed BOXN steel panels
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    for (let x = 20; x < 1024; x += 64) ctx.fillRect(x, 12, 12, 230);
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 26px monospace';
-    ctx.fillText('SCR  BOXN-HL  58T', 340, 145);
-  } else {
-    // Livery stripe
-    ctx.fillStyle = stripeHex;
-    ctx.fillRect(0, 152, 1024, 28);
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 224, 1024, 32); // Underframe skirt
-
-    // Doors at both ends
-    ctx.fillStyle = '#334155';
-    ctx.fillRect(24, 42, 48, 178);
-    ctx.fillRect(952, 42, 48, 178);
-
-    // Tinted passenger windows with subtle glass reflection
-    for (let x = 105; x < 900; x += 82) {
-      const grad = ctx.createLinearGradient(x, 58, x, 132);
-      grad.addColorStop(0, '#0f172a');
-      grad.addColorStop(0.45, '#334155');
-      grad.addColorStop(1, '#1e293b');
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, 58, 62, 74);
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(x, 58, 62, 74);
-    }
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText('INDIAN RAILWAYS', 415, 205);
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
-  return tex;
-}
-
-function makeStationBoard(text, subText = 'SOUTH CENTRAL RAILWAY') {
-  const c = document.createElement('canvas');
-  c.width = 640; c.height = 192;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#facc15'; ctx.fillRect(0, 0, 640, 192);
-  ctx.strokeStyle = '#111827'; ctx.lineWidth = 12; ctx.strokeRect(8, 8, 624, 176);
-  ctx.fillStyle = '#111827'; ctx.font = 'bold 44px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText(text, 320, 96);
-  ctx.font = 'bold 22px sans-serif';
-  ctx.fillText(subText, 320, 146);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45 });
-}
-
-function makeBuildingFacadeTexture(wallHex) {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 256;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = wallHex; ctx.fillRect(0, 0, 256, 256);
-  for (let y = 26; y < 220; y += 64) {
-    for (let x = 24; x < 230; x += 56) {
-      ctx.fillStyle = Math.random() > 0.3 ? '#1e293b' : '#fef08a';
-      ctx.fillRect(x, y, 30, 36);
-      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 3;
-      ctx.strokeRect(x, y, 30, 36);
-    }
-  }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-const ballastTex = makeProceduralBallastTexture();
-const platformTileTex = makePlatformTileTexture();
-const roofTex = makeCorrugatedRoofTexture();
-const terrainTex = makeDeccanTerrainTexture();
-
-// Textured Deccan Terrain
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(6000, 20000),
-  new THREE.MeshStandardMaterial({ map: terrainTex, roughness: 0.96, metalness: 0.0 })
-);
-ground.rotation.x = -Math.PI / 2;
-ground.position.set(0, -0.25, -7000);
-ground.receiveShadow = true;
-scene.add(ground);
-
-// =========================================================================
-// 4. WORLD STATE, GUNTAKAL ROR FLYOVER SPLINE & PASSENGER ANIMATION STATE
-// =========================================================================
-const worldGroup = new THREE.Group();
-scene.add(worldGroup);
-
-let signal3DLamps = { g: null, y2: null, y1: null, r: null, feather: null };
-let platformNightLights = [];
-let animatedPassengers = []; // Procedural articulated people on platforms
-let glbPassengerMixers = []; // THREE.AnimationMixer instances if models/passenger.glb is uploaded
-let passengerGlbTemplate = null;
-
-// Pre-check for optional rigged passenger.glb (Mixamo / Renderpeople)
-gltfLoader.load(`${ASSETS_BASE}/models/passenger.glb`, (gltf) => {
-  passengerGlbTemplate = gltf;
-}, undefined, () => {});
-
-const GTL_KRNT_PASSENGER_STOPS = [
-  { code: 'GTL',  name: 'GUNTAKAL JN (7 PF)',   pf: 7, distM: 0 },
-  { code: 'MKR',  name: 'MADDIKERA (1 PF)',     pf: 1, distM: 2250 },
-  { code: 'TGL',  name: 'TUGGALI (1 PF)',       pf: 1, distM: 2850 },
-  { code: 'EDD',  name: 'EDDULADODDI (1 PF)',   pf: 1, distM: 3300 },
-  { code: 'PDL',  name: 'PENDEKALLU (LOOP)',    pf: 2, distM: 3800 },
-  { code: 'LMD',  name: 'LINGANENIDODDI',       pf: 1, distM: 4300 },
-  { code: 'MYL',  name: 'MALLIYALA',            pf: 1, distM: 4850 },
-  { code: 'DHNE', name: 'DHONE JN (4 PF)',      pf: 4, distM: 5500 },
-  { code: 'BVO',  name: 'BOGOLU',               pf: 1, distM: 6150 },
-  { code: 'VDI',  name: 'VELDURTI (LOOP)',      pf: 2, distM: 6800 },
-  { code: 'UKD',  name: 'ULINDAKONDA',          pf: 1, distM: 7450 },
-  { code: 'DUU',  name: 'DUPADU',               pf: 1, distM: 8100 },
-  { code: 'KRNT', name: 'KURNOOL CITY (3 PF)',  pf: 3, distM: 8800 }
-];
-
+// ======================================================================
+// State
+// ======================================================================
+const audio = new AudioEngine();
+audio.onLightning = (dist) => { state.flash = 1 - dist * 0.6; };
+const rig = new CameraRig(camera, renderer.domElement, (x, z) => (world ? world.terrain.heightAt(x, z) : 0));
 const state = {
-  hubs: [],
-  rosters: [],
-  plan: null,
-  reversedDirection: false, // false = GTL->DHNE (VV Nagar RIGHT), true = DHNE->GTL (VV Nagar LEFT)
-  speedKmph: 0,
-  notch: 0,
-  brake: 0,
-  trackZ: 40,
-  maxTrackLength: 9200,
-  onLoopTrack: false,
-  camMode: 2, // Start in External Chase so train, 7 platforms, people & OHE are immediately clear
-  weather: 'CLEAR',
-  gameMinutes: 7 * 60 + 15, // Crisp golden-morning 07:15 sunlight
-  rakeType: 'LHB',
-  activeStations: GTL_KRNT_PASSENGER_STOPS,
-  aiTrainZ: 2800
+  hubs: [], rosters: [], plan: null,
+  src: 'GTL', dst: 'SC', via: [], rakeType: 'LHB', allStops: false,
+  sFront: 0, speed: 0, notch: 0, brake: 0, emergency: false,
+  auto: false, simRate: 1, kavach: true, incident: null, busyStations: true,
+  weather: 'CLEAR', gameMinutes: 7 * 60 + 15, lights: 'auto', wipers: 'auto', derailments: false, scale: Number(localStorageGet('railsim.scale') || 1),
+  backendOnline: false
 };
+let layout = null, world = null, consist = null, ops = null, traffic = null, timetable = null, scorer = null;
+const stationAudio = new StationAudio(audio);
+let busy = false;
 
-function getMainTrackTransform(distM, applyLoop = true) {
-  let x = 0, y = 0, z = -distM, yaw = 0;
-  if (distM > 1000 && distM <= 2200) {
-    const t = (distM - 1000) / 1200;
-    const curve = Math.sin(t * Math.PI * 0.5);
-    x = curve * 140;
-    y = Math.sin(t * Math.PI) * 8.5;
-    yaw = -Math.atan2(140 * (Math.PI * 0.5) * Math.cos(t * Math.PI * 0.5), 1200);
-  } else if (distM > 2200) {
-    x = 140 + (distM - 2200) * 0.12;
-    y = 0;
-    yaw = -0.12;
-  }
-  if (applyLoop && state.onLoopTrack && distM > 3300 && distM < 4200) {
-    const lt = Math.sin(((distM - 3300) / 900) * Math.PI);
-    x += lt * 6.2;
-  }
-  return { x, y, z, yaw };
+function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } }
+
+let toastTimer = null;
+function toast(msg, kind = '', ms = 3200) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = kind;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, ms);
 }
 
-// =========================================================================
-// 5. ANIMATED 3D PASSENGERS (ARTICULATED INDIAN PASSENGERS + PORTERS)
-// =========================================================================
-function createArticulatedPassenger(isPorter = false) {
-  const person = new THREE.Group();
-  const shirtColors = [0xe11d48, 0x2563eb, 0xf59e0b, 0x10b981, 0x7c3aed, 0xf97316, 0xe2e8f0];
-  const pantColors  = [0x1e293b, 0x334155, 0x451a03, 0x1e3a8a, 0x0f172a];
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xc68652, roughness: 0.7 });
-  const topMat = new THREE.MeshStandardMaterial({
-    color: isPorter ? 0xdc2626 : shirtColors[Math.floor(Math.random() * shirtColors.length)],
-    roughness: 0.8
-  });
-  const bottomMat = new THREE.MeshStandardMaterial({
-    color: isPorter ? 0x1e3a8a : pantColors[Math.floor(Math.random() * pantColors.length)],
-    roughness: 0.85
-  });
-
-  // Head
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 10), skinMat);
-  head.position.y = 1.56;
-  head.castShadow = true;
-  person.add(head);
-
-  // Torso
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.38, 4, 8), topMat);
-  torso.position.y = 1.12;
-  torso.castShadow = true;
-  person.add(torso);
-
-  // Articulated Arms & Legs
-  const limbGeo = new THREE.CapsuleGeometry(0.055, 0.42, 4, 6);
-  const legGeo = new THREE.CapsuleGeometry(0.068, 0.52, 4, 6);
-
-  const leftArm = new THREE.Mesh(limbGeo, topMat);
-  leftArm.position.set(-0.22, 1.08, 0);
-  const rightArm = new THREE.Mesh(limbGeo, topMat);
-  rightArm.position.set(0.22, 1.08, 0);
-
-  const leftLeg = new THREE.Mesh(legGeo, bottomMat);
-  leftLeg.position.set(-0.09, 0.42, 0);
-  leftLeg.castShadow = true;
-  const rightLeg = new THREE.Mesh(legGeo, bottomMat);
-  rightLeg.position.set(0.09, 0.42, 0);
-  rightLeg.castShadow = true;
-
-  person.add(leftArm, rightArm, leftLeg, rightLeg);
-
-  // Luggage bag (trolley or porter head-trunk)
-  const bagMat = new THREE.MeshStandardMaterial({ color: isPorter ? 0x92400e : 0x0f172a, roughness: 0.6 });
-  const bag = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.42, 0.2), bagMat);
-  if (isPorter) {
-    bag.position.set(0, 1.88, 0);
-  } else {
-    bag.position.set(0.36, 0.24, 0.05);
-  }
-  person.add(bag);
-
-  person.userData = { leftArm, rightArm, leftLeg, rightLeg };
-  return person;
-}
-
-// =========================================================================
-// 6. DETAILED MULTI-PLATFORM INDIAN STATIONS (CANOPIES, FOB, BENCHES, PEOPLE)
-// =========================================================================
-function buildStation(name, platforms, startDistM) {
-  const grp = new THREE.Group();
-  const pfMat = new THREE.MeshStandardMaterial({ map: platformTileTex, roughness: 0.78, metalness: 0.05 });
-  const roofMat = new THREE.MeshStandardMaterial({ map: roofTex, metalness: 0.45, roughness: 0.48 });
-  const pillarMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.6, roughness: 0.4 });
-  const benchMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.85 });
-  const fobMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.5, roughness: 0.55 });
-  const ledMat = new THREE.MeshBasicMaterial({ color: 0xfef3c7 });
-  const boardMat = makeStationBoard(name);
-
-  const anchor = getMainTrackTransform(startDistM, false);
-  const visiblePfs = Math.min(platforms, 10);
-  const length = platforms >= 4 ? 320 : 185;
-  const centerIdx = Math.floor(visiblePfs / 2);
-
-  for (let p = 0; p < visiblePfs; p++) {
-    const offsetX = anchor.x + (p - centerIdx) * 8.8 + 4.4;
-    const centerZ = anchor.z - length * 0.42;
-
-    // Platform Deck with Yellow Safety Edge
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(4.6, 1.15, length), pfMat);
-    slab.position.set(offsetX, 0.575, centerZ);
-    slab.receiveShadow = true;
-    slab.castShadow = true;
-    grp.add(slab);
-
-    // Corrugated Blue-Grey Canopy Roof (sloped gable feel)
-    const canopyLen = length * 0.68;
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.22, canopyLen), roofMat);
-    roof.position.set(offsetX, 5.4, centerZ);
-    roof.castShadow = true;
-    grp.add(roof);
-
-    // Steel Canopy Pillars, Hanging Tube Lights & Concrete Benches
-    for (let zOff = -canopyLen * 0.45; zOff <= canopyLen * 0.45; zOff += 24) {
-      const pil = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 4.3, 8), pillarMat);
-      pil.position.set(offsetX, 3.25, centerZ + zOff);
-      pil.castShadow = true;
-      grp.add(pil);
-
-      // Glowing platform tube light strip
-      const lampBar = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.08, 1.8), ledMat);
-      lampBar.position.set(offsetX, 5.2, centerZ + zOff + 6);
-      grp.add(lampBar);
-
-      // Concrete waiting bench
-      const bench = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.5, 2.4), benchMat);
-      bench.position.set(offsetX + 0.6, 1.4, centerZ + zOff + 10);
-      bench.castShadow = true;
-      grp.add(bench);
-    }
-
-    // Yellow Indian Railways Station Nameboard at both ends of platform
-    if (p === centerIdx || p === centerIdx - 1) {
-      const board = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.25, 0.18), boardMat);
-      board.position.set(offsetX, 3.3, anchor.z - 22);
-      grp.add(board);
-    }
-
-    // Spawn Animated Passengers & Red-Shirt Porters on nearby major platforms
-    const peopleCount = (platforms >= 4) ? (p === centerIdx || p === centerIdx - 1 ? 10 : 4) : 4;
-    for (let k = 0; k < peopleCount; k++) {
-      const isWalker = k % 2 === 0;
-      const isPorter = k === 0 && platforms >= 4;
-      const pz = centerZ + (Math.random() - 0.5) * (canopyLen * 0.85);
-      const px = offsetX + (Math.random() - 0.5) * 2.6;
-
-      let personMesh;
-      if (passengerGlbTemplate) {
-        personMesh = passengerGlbTemplate.scene.clone();
-        if (passengerGlbTemplate.animations?.length) {
-          const mixer = new THREE.AnimationMixer(personMesh);
-          mixer.clipAction(passengerGlbTemplate.animations[0]).play();
-          glbPassengerMixers.push(mixer);
-        }
-      } else {
-        personMesh = createArticulatedPassenger(isPorter);
-      }
-
-      personMesh.position.set(px, 1.15, pz);
-      personMesh.rotation.y = isWalker ? (Math.random() > 0.5 ? 0 : Math.PI) : (Math.random() > 0.5 ? -Math.PI / 2 : Math.PI / 2);
-      grp.add(personMesh);
-
-      animatedPassengers.push({
-        mesh: personMesh,
-        stationDistM: startDistM,
-        baseZ: pz,
-        minZ: centerZ - canopyLen * 0.44,
-        maxZ: centerZ + canopyLen * 0.44,
-        isWalker,
-        walkSpeed: isWalker ? (0.8 + Math.random() * 0.65) : 0,
-        dir: personMesh.rotation.y === 0 ? 1 : -1,
-        phase: Math.random() * Math.PI * 2
-      });
-    }
-  }
-
-  // Foot-Over Bridge (FOB) spanning across ALL platforms at multi-platform hubs
-  if (visiblePfs >= 2) {
-    const spanW = visiblePfs * 8.8 + 4;
-    const fobDeck = new THREE.Mesh(new THREE.BoxGeometry(spanW, 0.45, 3.6), fobMat);
-    fobDeck.position.set(anchor.x, 7.6, anchor.z - length * 0.48);
-    fobDeck.castShadow = true;
-    grp.add(fobDeck);
-
-    const fobRoof = new THREE.Mesh(new THREE.BoxGeometry(spanW, 0.2, 4.0), roofMat);
-    fobRoof.position.set(anchor.x, 10.4, anchor.z - length * 0.48);
-    grp.add(fobRoof);
-  }
-
-  // Warm Night Floodlight per station hub
-  const stLight = new THREE.PointLight(0xffe4b5, 0, 95, 1.6);
-  stLight.position.set(anchor.x + 2, 11, anchor.z - 60);
-  grp.add(stLight);
-  platformNightLights.push(stLight);
-
-  worldGroup.add(grp);
-}
-
-// =========================================================================
-// 7. 3D HOODED 4-ASPECT MACL SIGNAL GANTRY
-// =========================================================================
-function build3DMACLSignal(distM) {
-  const anchor = getMainTrackTransform(distM, false);
-  const grp = new THREE.Group();
-  grp.position.set(anchor.x - 2.9, anchor.y, anchor.z);
-
-  const metalMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.75, roughness: 0.35 });
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.16, 7.0, 10), metalMat);
-  pole.position.y = 3.5;
-  pole.castShadow = true;
-  grp.add(pole);
-
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.75, 2.35, 0.48),
-    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.6 })
-  );
-  head.position.y = 5.4;
-  grp.add(head);
-
-  const makeLamp = (yOffset, hex) => {
-    const visor = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.21, 0.21, 0.35, 10, 1, true, 0, Math.PI),
-      new THREE.MeshStandardMaterial({ color: 0x020617, side: THREE.DoubleSide })
-    );
-    visor.rotation.x = Math.PI / 2;
-    visor.position.set(0, yOffset + 0.03, 0.36);
-    grp.add(visor);
-
-    const m = new THREE.Mesh(
-      new THREE.SphereGeometry(0.17, 12, 12),
-      new THREE.MeshBasicMaterial({ color: hex })
-    );
-    m.position.set(0, yOffset, 0.26);
-    grp.add(m);
-    return m;
-  };
-
-  const feather = new THREE.Mesh(
-    new THREE.BoxGeometry(1.25, 0.22, 0.25),
-    new THREE.MeshBasicMaterial({ color: 0x334155 })
-  );
-  feather.position.set(0.72, 6.75, 0.22);
-  feather.rotation.z = Math.PI / 6;
-  grp.add(feather);
-
-  signal3DLamps = {
-    g: makeLamp(6.15, 0x22c55e),
-    y2: makeLamp(5.65, 0x1e293b),
-    y1: makeLamp(5.15, 0x1e293b),
-    r: makeLamp(4.65, 0x1e293b),
-    feather
-  };
-  worldGroup.add(grp);
-}
-
-// =========================================================================
-// 8. INSTANCED TRACKS, 25KV OHE WIRES, DECCAN HILLS/TREES & VV NAGAR COLONY
-// =========================================================================
-function buildCorridorGeometry(isSingleLineAfterFlyover = true, stationList = state.activeStations) {
-  worldGroup.clear();
-  platformNightLights = [];
-  animatedPassengers = [];
-  glbPassengerMixers = [];
-
-  state.activeStations = stationList;
-  const maxDist = Math.max(6500, (stationList[stationList.length - 1]?.distM || 5800) + 500);
-  state.maxTrackLength = maxDist;
-
-  const railMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.92, roughness: 0.18 });
-  const ballastSingleMat = new THREE.MeshStandardMaterial({ map: ballastTex, roughness: 0.95 });
-  const oheMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.78, roughness: 0.32 });
-  const wireMat = new THREE.MeshBasicMaterial({ color: 0x1e293b });
-  const viaductMat = new THREE.MeshStandardMaterial({ color: 0x8b8680, roughness: 0.88 });
-
-  // 1. Straight Lower Double-Line continuing to GOOTY (GY) underneath the ROR Flyover
-  for (let d = 0; d < 2800; d += 40) {
-    const bed = new THREE.Mesh(new THREE.BoxGeometry(8.6, 0.32, 40.5), ballastSingleMat);
-    bed.position.set(-4.6, 0.04, -d);
-    bed.receiveShadow = true;
-    worldGroup.add(bed);
-    for (const rOff of [-6.4, -4.72, -2.9, -1.22]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.18, 40.5), railMat);
-      rail.position.set(rOff, 0.26, -d);
-      worldGroup.add(rail);
-    }
-  }
-
-  // 2. Active Corridor Spline (Broad-Gauge Tracks, Viaduct Piers, 25 kV OHE Masts + Catenary Wires)
-  const mastPositions = [];
-  for (let d = 0; d < maxDist; d += 30) {
-    const p1 = getMainTrackTransform(d, false);
-    const p2 = getMainTrackTransform(d + 30, false);
-    const midX = (p1.x + p2.x) / 2, midY = (p1.y + p2.y) / 2, midZ = (p1.z + p2.z) / 2;
-    const isSingle = isSingleLineAfterFlyover && d > 2400;
-
-    const deck = new THREE.Mesh(
-      new THREE.BoxGeometry(isSingle ? 4.5 : 9.4, p1.y > 0.5 ? 1.5 : 0.32, 31),
-      p1.y > 0.5 ? viaductMat : ballastSingleMat
-    );
-    deck.position.set(midX, midY - (p1.y > 0.5 ? 0.7 : 0.04), midZ);
-    deck.rotation.y = p1.yaw;
-    deck.receiveShadow = true;
-    worldGroup.add(deck);
-
-    // Concrete Viaduct Parapet Walls & Pillars on Guntakal ROR Flyover
-    if (p1.y > 0.8) {
-      const wallL = new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.1, 31), viaductMat);
-      wallL.position.set(midX - 4.5, midY + 0.5, midZ);
-      wallL.rotation.y = p1.yaw;
-      const wallR = wallL.clone();
-      wallR.position.x = midX + 4.5;
-      worldGroup.add(wallL, wallR);
-
-      if (d % 90 === 0) {
-        const pier = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.35, p1.y, 12), viaductMat);
-        pier.position.set(midX, p1.y / 2 - 0.8, midZ);
-        pier.castShadow = true;
-        worldGroup.add(pier);
-      }
-    }
-
-    // Indian Broad Gauge (1676 mm) Steel Rails
-    const railOffsets = isSingle ? [-0.84, 0.84] : [-0.84, 0.84, 4.2, 5.88];
-    for (const ro of railOffsets) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.18, 31), railMat);
-      rail.position.set(midX + ro, midY + 0.24, midZ);
-      rail.rotation.y = p1.yaw;
-      worldGroup.add(rail);
-    }
-
-    // Overhead 25 kV AC Contact Wire
-    const contactWire = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 31), wireMat);
-    contactWire.position.set(midX, midY + 5.85, midZ);
-    contactWire.rotation.y = p1.yaw;
-    worldGroup.add(contactWire);
-
-    if (d % 90 === 0) {
-      mastPositions.push({ x: midX - 3.1, y: midY, z: midZ, isSingle });
-    }
-  }
-
-  // Instanced 25 kV OHE Masts (1 draw call for entire route)
-  const mastMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.26, 7.3, 0.26), oheMat, mastPositions.length);
-  const armMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(4.2, 0.14, 0.14), oheMat, mastPositions.length);
-  mastMesh.castShadow = true;
-  const dummy = new THREE.Object3D();
-  mastPositions.forEach((m, i) => {
-    dummy.position.set(m.x, m.y + 3.65, m.z);
-    dummy.scale.set(1, 1, 1);
-    dummy.updateMatrix();
-    mastMesh.setMatrixAt(i, dummy.matrix);
-
-    dummy.position.set(m.x + (m.isSingle ? 2.1 : 4.6), m.y + 6.3, m.z);
-    dummy.scale.set(m.isSingle ? 1.0 : 2.2, 1, 1);
-    dummy.updateMatrix();
-    armMesh.setMatrixAt(i, dummy.matrix);
-  });
-  worldGroup.add(mastMesh, armMesh);
-
-  // 3. Visible 3D Loop Line Siding at Pendekallu Loop (3300m..4200m)
-  for (let d = 3300; d < 4200; d += 30) {
-    const p1 = getMainTrackTransform(d, false);
-    const lt = Math.sin(((d - 3300) / 900) * Math.PI);
-    const lx = p1.x + lt * 6.2;
-    const loopBed = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.32, 31), ballastSingleMat);
-    loopBed.position.set(lx, p1.y - 0.04, p1.z);
-    loopBed.rotation.y = p1.yaw;
-    worldGroup.add(loopBed);
-    for (const ro of [-0.84, 0.84]) {
-      const lr = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.18, 31), railMat);
-      lr.position.set(lx + ro, p1.y + 0.24, p1.z);
-      lr.rotation.y = p1.yaw;
-      worldGroup.add(lr);
-    }
-  }
-
-  // 4. Instanced Deccan Environment (Hills + Scrub Trees along corridor)
-  const treeCount = 260;
-  const trunkInst = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.22, 0.34, 3.2, 7),
-    new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.95 }),
-    treeCount
-  );
-  const foliageInst = new THREE.InstancedMesh(
-    new THREE.DodecahedronGeometry(2.3, 1),
-    new THREE.MeshStandardMaterial({ color: 0x3b6e38, roughness: 0.9 }),
-    treeCount
-  );
-  foliageInst.castShadow = true;
-  for (let i = 0; i < treeCount; i++) {
-    const d = 150 + (i / treeCount) * (maxDist - 300);
-    const tr = getMainTrackTransform(d, false);
-    const side = (i % 2 === 0 ? 1 : -1) * (24 + (i * 19) % 110);
-    const sc = 0.75 + ((i * 7) % 10) * 0.08;
-    dummy.position.set(tr.x + side, 1.5 * sc, tr.z);
-    dummy.scale.set(sc, sc, sc);
-    dummy.updateMatrix();
-    trunkInst.setMatrixAt(i, dummy.matrix);
-
-    dummy.position.set(tr.x + side, 3.9 * sc, tr.z);
-    dummy.updateMatrix();
-    foliageInst.setMatrixAt(i, dummy.matrix);
-  }
-  worldGroup.add(trunkInst, foliageInst);
-
-  // Deccan Rocky Hills on Horizon
-  const hillMat = new THREE.MeshStandardMaterial({ color: 0x7c624b, roughness: 0.98 });
-  for (let h = 0; h < 16; h++) {
-    const d = 400 + h * 550;
-    const tr = getMainTrackTransform(Math.min(d, maxDist - 100), false);
-    const hill = new THREE.Mesh(new THREE.ConeGeometry(140 + (h % 3) * 55, 55 + (h % 4) * 28, 7), hillMat);
-    hill.position.set(tr.x + (h % 2 === 0 ? 320 : -340), 22, tr.z);
-    worldGroup.add(hill);
-  }
-
-  // 5. Detailed VV NAGAR COLONY anchored at +45m RIGHT of GTL->DHNE ROR Flyover
-  const vvAnchor = getMainTrackTransform(1650, false);
-  const vvGroup = new THREE.Group();
-  vvGroup.position.set(vvAnchor.x + 45, 0, vvAnchor.z);
-  const facadeMats = ['#fef3c7', '#dbeafe', '#fce7f3', '#d1fae5', '#e2e8f0'].map(
-    col => new THREE.MeshStandardMaterial({ map: makeBuildingFacadeTexture(col), roughness: 0.85 })
-  );
-  const tankMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.5 });
-  for (let i = 0; i < 21; i++) {
-    const h = 5.5 + (i % 3) * 3.8;
-    const bldg = new THREE.Mesh(new THREE.BoxGeometry(11, h, 13), facadeMats[i % facadeMats.length]);
-    const bx = (i % 3) * 18, bz = -Math.floor(i / 3) * 20;
-    bldg.position.set(bx, h / 2, bz);
-    bldg.castShadow = true;
-    bldg.receiveShadow = true;
-    vvGroup.add(bldg);
-
-    // Rooftop water tank (signature Indian residential silhouette)
-    const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 1.5, 10), tankMat);
-    tank.position.set(bx + 2.2, h + 0.75, bz);
-    vvGroup.add(tank);
-  }
-  const vvBoard = new THREE.Mesh(new THREE.BoxGeometry(15, 3.6, 0.4), makeStationBoard('VV NAGAR COLONY', 'GUNTAKAL'));
-  vvBoard.position.set(-7, 7.8, -22);
-  vvBoard.rotation.y = -Math.PI / 2;
-  vvGroup.add(vvBoard);
-  worldGroup.add(vvGroup);
-
-  // 6. Stations + 3D 4-Aspect MACL Signal Gantry
-  stationList.forEach(s => buildStation(s.name, s.pf, s.distM));
-  build3DMACLSignal(3220);
-}
-
-// =========================================================================
-// 9. DETAILED MULTI-PART INDIAN TRAINS (WITH ROTATING BOGIES + GLB OVERRIDE)
-// =========================================================================
-function buildDetailedBogie(zPos) {
-  const bogie = new THREE.Group();
-  const darkSteel = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8, roughness: 0.35 });
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.9, roughness: 0.25 });
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.42, 3.4), darkSteel);
-  frame.position.set(0, 0.68, zPos);
-  bogie.add(frame);
-
-  for (const dz of [-1.15, 1.15]) {
-    const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 2.0, 8), darkSteel);
-    axle.rotation.z = Math.PI / 2;
-    axle.position.set(0, 0.48, zPos + dz);
-    bogie.add(axle);
-
-    for (const wx of [-0.88, 0.88]) {
-      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.16, 16), wheelMat);
-      wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(wx, 0.48, zPos + dz);
-      bogie.add(wheel);
-    }
-  }
-  return bogie;
-}
-
-function buildTrainMesh(rakeType, isPlayer = true) {
-  const train = new THREE.Group();
-  const palette = {
-    VANDE_BHARAT:   { loco: '#f8fafc', stripe: '#ea580c', coach: '#f1f5f9', aero: true,  freight: false, panto: true  },
-    LHB:            { loco: '#f1f5f9', stripe: '#dc2626', coach: '#b91c1c', aero: false, freight: false, panto: true  },
-    ICF:            { loco: '#1d4ed8', stripe: '#facc15', coach: '#1e40af', aero: false, freight: false, panto: false },
-    DEMU_PASSENGER: { loco: '#cbd5e1', stripe: '#0284c7', coach: '#0369a1', aero: false, freight: false, panto: false },
-    BOXN_GOODS:     { loco: '#15803d', stripe: '#facc15', coach: '#7c2d12', aero: false, freight: true,  panto: true  }
-  }[rakeType] || { loco: '#f1f5f9', stripe: '#dc2626', coach: '#b91c1c', aero: false, freight: false, panto: true };
-
-  // Automatic photorealistic .glb swap if placed in frontend/public/models/ or Cloud Storage models/
-  gltfLoader.load(`${ASSETS_BASE}/models/${rakeType.toLowerCase()}.glb`, (gltf) => {
-    train.clear();
-    gltf.scene.traverse((obj) => { if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; } });
-    train.add(gltf.scene);
-  }, undefined, () => { /* keep detailed multi-part procedural train below */ });
-
-  const locoMat = new THREE.MeshStandardMaterial({ color: palette.loco, metalness: 0.35, roughness: 0.35 });
-  const stripeMat = new THREE.MeshStandardMaterial({ color: palette.stripe, metalness: 0.2, roughness: 0.4 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.55, roughness: 0.45 });
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.9, roughness: 0.08 });
-  const cowCatcherMat = new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.7, roughness: 0.5 });
-
-  // Sculpted Locomotive Body
-  const locoBody = new THREE.Mesh(new THREE.BoxGeometry(3.12, 3.25, 19.6), locoMat);
-  locoBody.position.set(0, 2.55, 0);
-  locoBody.castShadow = true;
-  train.add(locoBody);
-
-  // Aerodynamic Nose (Vande Bharat) or Classic Sloped WAP-7/WAG-12 Front Cab
-  const nose = new THREE.Mesh(
-    palette.aero ? new THREE.ConeGeometry(1.75, 4.2, 4) : new THREE.BoxGeometry(3.08, 1.8, 1.4),
-    locoMat
-  );
-  if (palette.aero) {
-    nose.rotation.x = -Math.PI / 2;
-    nose.rotation.y = Math.PI / 4;
-    nose.position.set(0, 2.0, -11.6);
-  } else {
-    nose.position.set(0, 1.9, -10.1);
-  }
-  train.add(nose);
-
-  // Livery Stripe + Dark Underframe + Buffer Beam & Cowcatcher
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(3.16, 0.55, 19.8), stripeMat);
-  stripe.position.set(0, 2.15, 0);
-  train.add(stripe);
-
-  const cowCatcher = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.55, 0.6), cowCatcherMat);
-  cowCatcher.position.set(0, 0.72, -10.4);
-  train.add(cowCatcher);
-
-  // Cab Windshield Glass
-  const windshield = new THREE.Mesh(new THREE.BoxGeometry(2.55, 0.95, 0.16), glassMat);
-  windshield.position.set(0, 3.35, -9.85);
-  windshield.rotation.x = -0.18;
-  train.add(windshield);
-
-  // Curved Locomotive Roof + AC Units
-  const locoRoof = new THREE.Mesh(new THREE.CylinderGeometry(1.56, 1.56, 19.4, 12, 1, false, 0, Math.PI), roofMat);
-  locoRoof.rotation.z = Math.PI / 2;
-  locoRoof.rotation.y = Math.PI / 2;
-  locoRoof.scale.set(1, 0.35, 1);
-  locoRoof.position.set(0, 4.18, 0);
-  train.add(locoRoof);
-
-  // Dual Diamond Pantographs (Electric Locos / Vande Bharat)
-  if (palette.panto) {
-    const pantoMat = new THREE.MeshStandardMaterial({ color: 0xea580c, metalness: 0.7, roughness: 0.3 });
-    for (const pz of [-5.2, 5.2]) {
-      const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.35, 0.1), pantoMat);
-      arm1.position.set(0, 4.95, pz);
-      arm1.rotation.x = 0.45;
-      const panHead = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.08, 0.28), pantoMat);
-      panHead.position.set(0, 5.6, pz + 0.35);
-      train.add(arm1, panHead);
-    }
-  }
-
-  // Twin Glowing Headlamps + Volumetric Beam
-  const lampGlow = new THREE.MeshBasicMaterial({ color: 0xfffbeb });
-  for (const lx of [-0.75, 0.75]) {
-    const hl = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.12, 12), lampGlow);
-    hl.rotation.x = Math.PI / 2;
-    hl.position.set(lx, 1.85, -10.55);
-    train.add(hl);
-  }
-  if (isPlayer) {
-    const headlight = new THREE.SpotLight(0xfff7d6, 1800, 360, Math.PI / 6.5, 0.45, 1.5);
-    headlight.position.set(0, 2.7, -10.5);
-    headlight.target.position.set(0, 0.5, -180);
-    train.add(headlight, headlight.target);
-  }
-
-  // Locomotive Bogies
-  train.add(buildDetailedBogie(-6.2), buildDetailedBogie(6.2));
-
-  // Textured Passenger Coaches or BOXN Freight Wagons
-  const coachSideTex = makeCoachSideTexture(palette.coach, palette.stripe, palette.freight);
-  const coachSideMat = new THREE.MeshStandardMaterial({ map: coachSideTex, roughness: 0.38, metalness: 0.25 });
-  const coachEndMat  = new THREE.MeshStandardMaterial({ color: palette.coach, roughness: 0.5 });
-  const coachMats = [coachSideMat, coachSideMat, roofMat, cowCatcherMat, coachEndMat, coachEndMat];
-  const vestibuleMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.9 });
-
-  const count = palette.freight ? 14 : (rakeType === 'DEMU_PASSENGER' ? 6 : 8);
-  const len = palette.freight ? 11.2 : 21.5;
-  const h = palette.freight ? 2.4 : 3.3;
-
-  for (let i = 1; i <= count; i++) {
-    const cz = i * (len + 1.15);
-    const coach = new THREE.Mesh(new THREE.BoxGeometry(3.08, h, len), coachMats);
-    coach.position.set(0, h / 2 + 0.92, cz);
-    coach.castShadow = true;
-    coach.receiveShadow = true;
-    train.add(coach);
-
-    // Inter-coach rubber gangway / coupler
-    const gangway = new THREE.Mesh(new THREE.BoxGeometry(palette.freight ? 0.6 : 1.75, palette.freight ? 0.4 : 2.4, 1.25), vestibuleMat);
-    gangway.position.set(0, palette.freight ? 1.0 : 2.35, cz - len / 2 - 0.58);
-    train.add(gangway);
-
-    // Bogies per coach
-    train.add(buildDetailedBogie(cz - len * 0.34), buildDetailedBogie(cz + len * 0.34));
-  }
-  return train;
-}
-
-let playerTrain = buildTrainMesh('LHB', true);
-scene.add(playerTrain);
-let aiTrain = buildTrainMesh('BOXN_GOODS', false);
-scene.add(aiTrain);
-
-// =========================================================================
-// 10. MONSOON RAIN + WEB AUDIO DUAL-TONE HORN SFX
-// =========================================================================
-const rainCount = 1800;
-const rainGeo = new THREE.BufferGeometry();
-const rainPos = new Float32Array(rainCount * 3);
-for (let i = 0; i < rainCount; i++) {
-  rainPos[i * 3] = (Math.random() - 0.5) * 90;
-  rainPos[i * 3 + 1] = Math.random() * 45;
-  rainPos[i * 3 + 2] = (Math.random() - 0.5) * 130;
-}
-rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
-const rainPoints = new THREE.Points(rainGeo, new THREE.PointsMaterial({ color: 0xe2e8f0, size: 0.24, transparent: true, opacity: 0.72 }));
-rainPoints.visible = false;
-scene.add(rainPoints);
-
-let audioCtx = null;
-function playDualHorn() {
-  audioCtx = audioCtx || new AudioContext();
-  [311, 392].forEach(freq => {
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = 'sawtooth'; osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.15);
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime + 1.15);
-  });
-}
-
-// =========================================================================
-// 11. LIVE GCP CLOUD RUN / LOCAL SPRING BOOT API INTEGRATION
-// =========================================================================
-async function loadHubsAndRosters() {
+// ======================================================================
+// API
+// ======================================================================
+async function fetchJson(url, opts = {}, timeout = 4000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeout);
   try {
-    const res = await fetch(`${API_BASE}/hubs`);
-    state.hubs = await res.json();
+    const r = await fetch(url, { ...opts, signal: ctl.signal });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+async function loadHubs() {
+  try {
+    state.hubs = await fetchJson(`${API_BASE}/hubs`);
+    state.backendOnline = true;
+    // include hubs added by newer changesets even before the backend restarts
+    for (const h of OFFLINE_HUBS) if (!state.hubs.some((x) => x.code === h.code)) state.hubs.push(h);
   } catch {
-    state.hubs = [
-      { code: 'GTL', name: 'Guntakal Jn', platforms: 7 }, { code: 'TPTY', name: 'Tirupati', platforms: 6 },
-      { code: 'HYB', name: 'Hyderabad Deccan (Nampally)', platforms: 6 }, { code: 'SC', name: 'Secunderabad Jn', platforms: 10 },
-      { code: 'RC', name: 'Raichur Jn', platforms: 3 }, { code: 'KRNT', name: 'Kurnool City', platforms: 3 },
-      { code: 'GWD', name: 'Gadwal Jn', platforms: 3 }, { code: 'DHNE', name: 'Dhone Jn', platforms: 4 },
-      { code: 'WADI', name: 'Wadi Jn', platforms: 4 }, { code: 'SBC', name: 'KSR Bengaluru', platforms: 10 },
-      { code: 'MAS', name: 'MGR Chennai Central', platforms: 17 }, { code: 'CSMT', name: 'Mumbai CSMT', platforms: 18 },
-      { code: 'NDLS', name: 'New Delhi', platforms: 16 }, { code: 'BZA', name: 'Vijayawada Jn', platforms: 10 },
-      { code: 'VSKP', name: 'Visakhapatnam', platforms: 8 }, { code: 'HWH', name: 'Howrah Jn', platforms: 23 },
-      { code: 'CBE', name: 'Coimbatore Jn', platforms: 6 }, { code: 'ADI', name: 'Ahmedabad Jn', platforms: 12 },
-      { code: 'JP', name: 'Jaipur Jn', platforms: 7 }
-    ];
+    state.hubs = OFFLINE_HUBS;
+    state.backendOnline = false;
   }
-  const srcSel = document.getElementById('sel-src');
-  const dstSel = document.getElementById('sel-dst');
-  const viaSel = document.getElementById('sel-via');
-  state.hubs.forEach(h => {
-    const opt = `<option value="${h.code}">${h.name} (${h.code} - ${h.platforms} PF)</option>`;
-    srcSel.insertAdjacentHTML('beforeend', opt);
-    dstSel.insertAdjacentHTML('beforeend', opt);
-    viaSel.insertAdjacentHTML('beforeend', opt);
+  const opts = state.hubs.slice().sort((a, b) => a.code.localeCompare(b.code))
+    .map((h) => `<option value="${h.code}">${h.name} (${h.code} · ${h.platforms} PF)</option>`).join('');
+  $('sel-src').innerHTML = opts;
+  $('sel-dst').innerHTML = opts;
+  const via = $('sel-via');
+  for (const h of state.hubs) via.insertAdjacentHTML('beforeend', `<option value="${h.code}">${h.code} — ${h.name}</option>`);
+  await refreshRosters();
+}
+
+async function refreshRosters() {
+  const sel = $('sel-roster');
+  sel.innerHTML = '<option value="">— Load from PostgreSQL —</option>';
+  try {
+    state.rosters = await fetchJson(`${API_BASE}/rosters`);
+    state.rosters.forEach((r, i) => sel.insertAdjacentHTML('beforeend', `<option value="${i}">${r.trainNumber} ${r.trainName} (${r.sourceCode}→${r.destCode})</option>`));
+  } catch { state.rosters = []; }
+}
+
+async function solveRoute(src, dst, via, allStops) {
+  if (state.backendOnline) {
+    try {
+      return applyOverrides(await fetchJson(`${API_BASE}/routes/solve`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: src, dest: dst, viaHubs: via, allStopsPassenger: allStops })
+      }, 8000));
+    } catch (e) {
+      console.warn('API solve failed, using offline graph', e);
+    }
+  }
+  return applyOverrides(solveOffline(src, dst, via, allStops));
+}
+
+// ======================================================================
+// Route start
+// ======================================================================
+async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = false, minutes = null, stops = null }) {
+  if (busy) return;
+  busy = true;
+  loader.show();
+  loader.set(`Solving ${src} → ${dst}…`, 10);
+  await nextFrame();
+  let plan;
+  try {
+    plan = await solveRoute(src, dst, via, allStops || rakeType === 'DEMU_PASSENGER');
+  } catch (e) {
+    loader.hide();
+    toast(`Route error: ${e.message}`, 'warn', 5000);
+    busy = false;
+    return;
+  }
+  Object.assign(state, { src, dst, via, rakeType, allStops, stops, plan, speed: 0, notch: 0, brake: 0, emergency: false });
+  if (minutes !== null) state.gameMinutes = minutes;
+
+  loader.set('Laying track, stations & terrain…', 25);
+  await nextFrame();
+  if (world) world.dispose();
+  if (consist) consist.dispose();
+  if (traffic) traffic.dispose();
+  const seedKey = plan.route.legs.map((l) => l.edgeId).join('>') + '|' + src + dst;
+  if (layout) finishCareerRun({ completed: false }); // leaving a run part-way
+  const tm = [performance.now()];
+  layout = buildRouteLayout(plan, { hubs: state.hubs, seedKey, scale: state.scale });
+  if (stops) { // preset halt list: stop only at these stations (origin/destination always)
+    for (const st of layout.stations) if (!st.isOrigin && !st.isDest && !st.reversal) st.halt = stops.includes(st.code);
+  }
+  ops = new Operations(layout, plan, rakeType, seedKey);
+  tm.push(performance.now());
+  world = new World(scene, layout, { seedKey, density: Q.density });
+  ops.pointsMoving = (st) => world.pointsMovingAt(st);
+  tm.push(performance.now());
+  consist = new Consist(rakeType, { isPlayer: true });
+  tm.push(performance.now());
+  scene.add(consist.group);
+  traffic = new Traffic(scene, layout, ops, (rake, cars) => new Consist(rake, { cars }), audio);
+  world.setBlockSignals(ops.ibs);
+  timetable = new Timetable(layout, ops, rakeType, state.gameMinutes);
+  ops.busyEnabled = state.busyStations;
+  stationAudio.reset();
+  traffic.onStationEvent = (type, t) => stationAudio.trainEvent(type, t, state.gameMinutes);
+  traffic.onReroute = (st, prev, now, tr) => { pfShownFor = null; toast(`${st.name}: ${tr.name} is being received on ${prev} — control has rerouted us to ${now.name}`, 'warn', 6000); };
+  traffic.onPlatformTaken = (st, track, tr) => { pfShownFor = null; toast(`${st.name}: ${tr.name} is arriving on ${track.name}`, 'ok', 3000); };
+  traffic.onPrecedence = (st, loop, tr) => { pfShownFor = null; toast(`Control: ${tr.name} is behind us — we will be looped at ${st.name} (${loop.name}) to let it pass.`, 'warn', 6500); };
+  scorer = new Scorer();
+  state.engineChange = null; state.haltedAt = null; state.passed = new Set(); state.summaryShown = false;
+  state.traction = consist.loco ? LOCOS[consist.loco].traction : RAKES[rakeType].traction;
+  state.incident = null;
+  ops.spads = 0;
+  careerRun = { route: `${src} → ${dst}`, rake: rakeType, km: 0, lastKm: 0, done: false };
+  renderStopsPanel();
+
+  const origin = layout.stations[0];
+  state.sFront = origin.layout.pEnd - 14;
+  consist.place(layout.path, ops.lane, state.sFront, 1);
+  rig.reset();
+  const lead = consist.lead.group.position;
+  loader.set('Streaming scenery…', 45);
+  await nextFrame();
+  world.update(state.sFront, lead, { init: true });
+  world.updateSwitches(state.sFront, ops.lane, 0, null);
+  tm.push(performance.now());
+  loader.set('Compiling shaders…', 85);
+  await nextFrame();
+  try { await renderer.compileAsync(scene, camera); } catch { /* optional */ }
+  tm.push(performance.now());
+  console.info('[railsim] load ms: layout', (tm[1] - tm[0]) | 0, 'world', (tm[2] - tm[1]) | 0, 'consist', (tm[3] - tm[2]) | 0, 'stream', (tm[4] - tm[3]) | 0, 'compile', (tm[5] - tm[4]) | 0);
+
+  buildStripMap();
+  updateRouteHeader();
+  renderSolvedList();
+  loader.set('Ready', 100);
+  loader.hide();
+  busy = false;
+  const t = ops.trackOf(origin);
+  toast(`${rakeLabel()} at ${origin.name} ${t.name}. Starter clears in a few seconds — W to notch up, A for auto. Edit halts under “Stops”.`, 'ok', 5500);
+}
+
+function rakeLabel() { return RAKES[state.rakeType].label; }
+
+function updateRouteHeader() {
+  const r = state.plan.route;
+  const a = layout.stations[0], b = layout.stations[layout.stations.length - 1];
+  $('route-title').textContent = `${ops.trainNo} ${a.name} → ${b.name}`;
+  let meta = `${r.totalRealKm} km · ${layout.stations.length} stations · ${rakeLabel()}`;
+  if (layout.gtl) meta += ` · Dhone diversion · VV Nagar ${world.gtl.vvSide}`;
+  $('route-meta').textContent = meta;
+  $('backend-badge').textContent = `${isWebGPU ? 'WebGPU' : 'WebGL2'} · ${state.backendOnline ? 'API live' : 'offline graph'}`;
+}
+
+function renderSolvedList() {
+  const legs = state.plan.route.legs;
+  const html = legs.map((l) => `<div><b>${l.from}→${l.to}</b> <span class="muted">[${l.trackType}, ${l.biome}]</span>: ` +
+    l.stations.map((s) => (s.defaultHalt ? `<b>${s.code}</b>` : `${s.code}*`)).join(' → ') + '</div>').join('');
+  const cr = (state.plan.crossings || []).filter((c) => c.eventType === 'SINGLE_LINE_LOOP_WAIT').slice(0, 5)
+    .map((c) => `<div style="color:#fbbf24;">Crossing @ ${c.stationCode}: wait for ${c.oncomingTrainName}</div>`).join('');
+  $('solved').innerHTML = html + cr;
+}
+
+function buildStripMap() {
+  const track = $('strip-track');
+  track.querySelectorAll('.st').forEach((e) => e.remove());
+  const total = layout.total;
+  const n = layout.stations.length;
+  layout.stations.forEach((st, i) => {
+    const d = document.createElement('div');
+    d.className = 'st' + (st.halt ? ' halt' : '');
+    d.style.left = `${(st.layout.sCenter / total) * 100}%`;
+    if (st.halt || i === 0 || i === n - 1 || n < 14) {
+      const lb = document.createElement('label');
+      lb.textContent = st.code;
+      d.appendChild(lb);
+    }
+    d.title = `${st.name} (${st.platforms} PF)`;
+    track.appendChild(d);
   });
-  srcSel.value = 'GTL'; dstSel.value = 'KRNT';
-  await refreshSavedRosters();
 }
 
-async function refreshSavedRosters() {
-  const rosterSel = document.getElementById('sel-saved-roster');
-  rosterSel.innerHTML = '<option value="">-- Load from PostgreSQL --</option>';
-  try {
-    const res = await fetch(`${API_BASE}/rosters`);
-    state.rosters = await res.json();
-    state.rosters.forEach((r, idx) => {
-      rosterSel.insertAdjacentHTML('beforeend', `<option value="${idx}">${r.trainNumber} ${r.trainName} (${r.sourceCode}->${r.destCode})</option>`);
-    });
-  } catch { /* offline fallback */ }
-}
-
-async function solveRouteFromApi(forceAllStops = false, customViaArray = null) {
-  const source = document.getElementById('sel-src').value;
-  const dest = document.getElementById('sel-dst').value;
-  const viaRaw = document.getElementById('sel-via').value;
-  const viaHubs = customViaArray ?? (viaRaw ? viaRaw.split(',').map(s => s.trim()).filter(Boolean) : []);
-  state.rakeType = document.getElementById('sel-rake').value;
-  const allStopsPassenger = forceAllStops || state.rakeType === 'DEMU_PASSENGER';
-
-  scene.remove(playerTrain);
-  playerTrain = buildTrainMesh(state.rakeType, true);
-  scene.add(playerTrain);
-
-  if (source === 'GTL' && dest === 'KRNT' && allStopsPassenger) {
-    buildCorridorGeometry(true, GTL_KRNT_PASSENGER_STOPS);
-    document.getElementById('route-title').textContent = '77414 Guntakal -> Kurnool City Passenger (123 km • All 13 Stops)';
-    document.getElementById('route-meta').textContent = 'Dep 04:40 GTL -> ROR Flyover (VV Nagar RIGHT) -> Dhone -> Arr 07:30 KRNT';
+// ======================================================================
+// Platform selector
+// ======================================================================
+let pfShownFor = null, pfLockedShown = false;
+function updatePlatformPanel() {
+  const st = ops.selectorStation(state.sFront, state.speed);
+  const panel = $('pf-panel');
+  if (!st) { panel.style.display = 'none'; pfShownFor = null; return; }
+  panel.style.display = 'block';
+  const locked = ops.locked.has(st.index);
+  const chosen = ops.choices.get(st.index);
+  const key = `${st.index}|${chosen}|${locked}|${[...st.occupancy].map(([k, o]) => k + ':' + o.name).join(',')}|${st.halt}|${st.precedence?.state}|${st.busy?.state}`;
+  if (key === pfShownFor) return;
+  pfShownFor = key;
+  $('pf-title').textContent = `${st.name} — choose line`;
+  const freePf = ops.freeTracks(st).filter((t) => t.pf).map((t) => t.pf);
+  const note = st.precedence && st.precedence.state !== 'cleared' ? ` · PRECEDENCE for ${st.precedence.train.name}` : st.busy && st.busy.state !== 'cleared' && ops.busyEnabled ? ' · station busy' : '';
+  $('pf-sub').textContent = `${st.layout.N} platforms · ${st.layout.tracks.length} lines · free PF: ${freePf.length ? freePf.join(', ') : 'none'} · ${st.halt ? `halt ${st.dwellMin} min` : 'run-through'}${note}`;
+  const list = $('pf-list');
+  list.innerHTML = '';
+  for (const t of st.layout.tracks) {
+    const occ = st.occupancy.get(t.no);
+    const div = document.createElement('div');
+    div.className = 'pf ' + (occ ? 'occ' : 'free') + (chosen === t.no ? ' sel' : '');
+    const kind = t.pf ? (t.isThrough ? 'main line' : 'loop') : (t.isThrough ? 'no platform' : 'goods loop · no platform');
+    const status = occ ? (occ.kind === 'reserved' ? `Reserved: crossing ${occ.name}` : `Occupied: ${occ.name}`) : (chosen === t.no ? 'Route set ✓' : `Free · ${kind}${t.isThrough ? '' : ` · ${LOOP_LIMIT} km/h`}`);
+    div.innerHTML = `<b>${t.name}</b><small>${status}</small>`;
+    if (!occ) div.onclick = () => {
+      const r = ops.choose(st, t.no);
+      if (r === 'forced') { toast(`Precedence: control has set ${ops.trackOf(st).name} so ${st.precedence.train.name} can overtake`, 'warn', 3000); return; }
+      if (r === 'ok') toast(`Points throwing — route set: ${st.name} ${t.name}${st.halt && !t.pf ? ' (no platform here!)' : ''}`, st.halt && !t.pf ? 'warn' : 'ok', 2400);
+      else if (r === 'locked') toast('Route locked — train has passed the home signal', 'warn');
+      pfShownFor = null;
+    };
+    list.appendChild(div);
   }
-
-  try {
-    const res = await fetch(`${API_BASE}/routes/solve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, dest, viaHubs, allStopsPassenger })
-    });
-    state.plan = await res.json();
-    const legs = state.plan.route.legs;
-    const viaLabel = viaHubs.length ? ` via ${viaHubs.join('->')}` : '';
-    document.getElementById('route-title').textContent =
-      `${source} -> ${dest}${viaLabel} (${state.plan.route.totalRealKm} km | ~${state.plan.route.compressedMinutes} min)`;
-    const stHtml = legs.map(l =>
-      `<div><strong>${l.from}->${l.to}</strong> [${l.trackType}]: ` +
-      l.stations.map(s => s.defaultHalt ? `<b>${s.code}(${s.platforms}PF)</b>` : `${s.code}*`).join(' -> ') + `</div>`
-    ).join('');
-    const crHtml = state.plan.crossings.slice(0, 4).map(c =>
-      `<div style="color:#fbbf24;">Crossing @ ${c.stationCode}: ${c.eventType} vs ${c.oncomingTrainName}</div>`
-    ).join('');
-    document.getElementById('solved-stations').innerHTML = stHtml + crHtml;
-
-    if (!(source === 'GTL' && dest === 'KRNT' && allStopsPassenger) && legs.length > 0) {
-      const firstLeg = legs[0];
-      const st = firstLeg.stations;
-      const midName = st.length > 2 ? `${st[1].code} (LOOP)` : 'CROSSING LOOP';
-      buildCorridorGeometry(
-        firstLeg.trackType.includes('SINGLE') || firstLeg.edgeId === 'GTL_TO_DHNE_FLYOVER',
-        [
-          { code: st[0].code, name: `${st[0].code} (${st[0].platforms} PF)`, pf: st[0].platforms, distM: 0 },
-          { code: st[1]?.code || 'LOOP', name: midName, pf: 2, distM: 3550 },
-          { code: st[st.length - 1].code, name: `${st[st.length - 1].code} (${st[st.length - 1].platforms} PF)`, pf: st[st.length - 1].platforms, distM: 5800 }
-        ]
-      );
-    }
-    state.trackZ = 40; state.speedKmph = 0; state.notch = 0;
-  } catch {
-    if (source === 'GTL' && dest === 'KRNT' && allStopsPassenger) {
-      document.getElementById('solved-stations').innerHTML =
-        '<div><strong>77414 GTL-KRNT DEMU (Offline Preview):</strong> GTL -> MKR -> TGL -> EDD -> PDL -> LMD -> MYL -> DHNE -> BVO -> VDI -> UKD -> DUU -> KRNT (123 km)</div>';
-    } else {
-      document.getElementById('solved-stations').textContent = 'Running offline fallback (start Spring Boot API to query PostgreSQL).';
-    }
-  }
+  $('pf-lock').textContent = locked ? 'Route locked (home signal passed).' : 'Pick any FREE line before the home signal.';
 }
 
-// =========================================================================
-// 12. UI EVENT WIRING
-// =========================================================================
-document.getElementById('btn-toggle-builder').onclick = () => {
-  const m = document.getElementById('route-modal');
-  m.style.display = m.style.display === 'block' ? 'none' : 'block';
+// ======================================================================
+// Input
+// ======================================================================
+function notch(d) { state.notch = Math.max(0, Math.min(8, state.notch + d)); if (d > 0) { state.brake = 0; state.emergency = false; } state.auto = false; syncAuto(); }
+function brake(d) { state.brake = Math.max(0, Math.min(100, state.brake + d)); if (d > 0) state.notch = 0; state.auto = false; syncAuto(); }
+function syncAuto() { $('btn-auto').classList.toggle('on', state.auto); }
+async function unlockAudio() { try { await audio.init(); } catch (e) { console.warn(e); } }
+
+$('btn-up').onclick = () => notch(1);
+$('btn-dn').onclick = () => notch(-1);
+$('btn-brk').onclick = () => brake(25);
+$('btn-rel').onclick = () => { state.brake = 0; state.emergency = false; };
+$('btn-emg').onclick = () => { state.emergency = true; state.notch = 0; state.brake = 100; state.auto = false; syncAuto(); };
+const hornBtn = $('horn-btn');
+hornBtn.addEventListener('pointerdown', async () => { await unlockAudio(); audio.hornStart(); });
+for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) hornBtn.addEventListener(ev, () => audio.hornStop());
+$('btn-auto').onclick = () => { state.auto = !state.auto; if (state.auto) { state.emergency = false; } syncAuto(); toast(state.auto ? 'Auto driver ON — obeys signals, limits and halts' : 'Auto driver OFF', 'ok', 1800); };
+const cycle = (v) => (v === 'auto' ? 'on' : v === 'on' ? 'off' : 'auto');
+const label = (v) => v.charAt(0).toUpperCase() + v.slice(1);
+function toggleLights() { state.lights = cycle(state.lights); $('btn-lights').textContent = `Lights: ${label(state.lights)}`; $('btn-lights').classList.toggle('on', state.lights === 'on'); }
+function toggleWipers() { state.wipers = cycle(state.wipers); $('btn-wipers').textContent = `Wipers: ${label(state.wipers)}`; $('btn-wipers').classList.toggle('on', state.wipers === 'on'); }
+$('btn-lights').onclick = toggleLights;
+$('btn-wipers').onclick = toggleWipers;
+$('btn-derail').onclick = (e) => { state.derailments = !state.derailments; e.target.classList.toggle('on', state.derailments); e.target.textContent = `Derail: ${state.derailments ? 'on' : 'off'}`; toast(state.derailments ? 'Realistic derailment ON — gross overspeed over points/curves derails the train' : 'Derailment OFF — overspeed over points costs score and gives a heavy lurch', 'ok', 2600); };
+$('btn-busy').onclick = (e) => { state.busyStations = !state.busyStations; if (ops) ops.busyEnabled = state.busyStations; e.target.classList.toggle('on', state.busyStations); toast(state.busyStations ? 'Busy stations ON — some home signals will be held' : 'Busy stations OFF', 'ok', 2000); };
+$('btn-stops').onclick = () => { const m = $('stops-panel'); renderStopsPanel(); m.style.display = m.style.display === 'block' ? 'none' : 'block'; };
+$('btn-kavach').onclick = (e) => { state.kavach = !state.kavach; e.target.classList.toggle('on', state.kavach); toast(state.kavach ? 'Kavach ATP ON — automatic braking for red signals & overspeed' : 'Kavach ATP OFF — you are responsible for signals; SPADs can cause collisions', state.kavach ? 'ok' : 'warn', 3500); };
+$('btn-resume').onclick = () => resumeFromLastStation();
+$('btn-restart').onclick = () => { $('incident').style.display = 'none'; startRoute({ src: state.src, dst: state.dst, via: state.via, rakeType: state.rakeType, allStops: state.allStops }); };
+$('btn-builder').onclick = () => { const m = $('route-modal'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; };
+$('btn-reverse').onclick = () => startRoute({ src: state.dst, dst: state.src, via: state.via.slice().reverse(), rakeType: state.rakeType, allStops: state.allStops });
+$('sel-weather').onchange = (e) => { state.weather = e.target.value; };
+$('sel-time').onchange = (e) => {
+  if (e.target.value) {
+    const d = Number(e.target.value) - state.gameMinutes;
+    state.gameMinutes = Number(e.target.value);
+    if (timetable) timetable.shift(d); // a time jump moves the whole timetable with it
+  }
+  e.target.value = '';
 };
-document.getElementById('sel-saved-roster').onchange = (e) => {
+$('sel-rate').onchange = (e) => { state.simRate = Number(e.target.value); };
+$('sel-scale').value = String(state.scale);
+$('sel-scale').onchange = (e) => {
+  state.scale = Number(e.target.value); localStorageSet('railsim.scale', String(state.scale));
+  toast(state.scale === 1 ? 'Exact distances — restarting the route' : 'Compact 1:10 distances — restarting the route', 'ok', 2500);
+  startRoute({ src: state.src, dst: state.dst, via: state.via, rakeType: state.rakeType, allStops: state.allStops, stops: state.stops });
+};
+$('sel-quality').value = qualityKey;
+$('sel-quality').onchange = (e) => { localStorageSet('railsim.quality', e.target.value); location.search = `?q=${e.target.value}`; };
+$('btn-sound').onclick = async (e) => { await unlockAudio(); audio.enabled = !audio.enabled; e.target.classList.toggle('on', audio.enabled); };
+const setVoice = (mode) => {
+  stationAudio.voiceMode = mode; stationAudio.cloudDownUntil = 0;
+  $('btn-voice').textContent = mode === 'cloud' ? 'Voice: Cloud' : 'Voice: Browser';
+  $('btn-voice').classList.toggle('on', mode === 'cloud');
+  localStorageSet('railsim.voice', mode);
+};
+$('btn-voice').onclick = () => {
+  const next = stationAudio.voiceMode === 'cloud' ? 'browser' : 'cloud';
+  if (next === 'cloud' && !state.backendOnline) toast('Cloud voice needs the backend (API live) — using the browser voice until it is reachable', 'warn', 3500);
+  setVoice(next);
+  toast(next === 'cloud' ? 'Announcer: Google Cloud natural voice (station PA, distant)' : 'Announcer: browser voice (distant)', 'ok', 2200);
+};
+stationAudio.onCloudFail = (msg) => toast(`Cloud voice unavailable (${msg}) — using the browser voice for now`, 'warn', 3500);
+$('btn-announce').onclick = (e) => { audio.announcements = !audio.announcements; e.target.classList.toggle('on', audio.announcements); };
+const camSel = $('sel-cam');
+camSel.innerHTML = CAMERA_MODES.map((m, i) => `<option value="${i}">${m.label}</option>`).join('');
+camSel.value = String(rig.mode);
+camSel.onchange = (e) => rig.setMode(Number(e.target.value));
+
+const PRESETS = {
+  'gtl-sc': { src: 'GTL', dst: 'SC', via: ['DHNE', 'KRNT', 'GWD'], rakeType: 'LHB', stops: ['DHNE', 'KRNT', 'GWD', 'MBNR', 'JCL', 'KCG', 'SC'] },
+  'gtl-krnt': { src: 'GTL', dst: 'KRNT', via: [], rakeType: 'LHB' },
+  'gtl-krnt-pass': { src: 'GTL', dst: 'KRNT', via: ['DHNE'], rakeType: 'DEMU_PASSENGER', allStops: true, minutes: 4 * 60 + 40 },
+  'krnt-gtl': { src: 'KRNT', dst: 'GTL', via: [], rakeType: 'LHB' },
+  'atp-krnt': { src: 'ATP', dst: 'KRNT', via: ['GTL'], rakeType: 'LHB' },
+  'tpty-rc-wadi': { src: 'TPTY', dst: 'HYB', via: ['GTL', 'RC', 'WADI'], rakeType: 'LHB' },
+  'tpty-krnt': { src: 'TPTY', dst: 'HYB', via: ['GTL', 'KRNT'], rakeType: 'LHB' },
+  'sbc-gtl': { src: 'SBC', dst: 'GTL', via: [], rakeType: 'LHB' },
+  'mas-bza': { src: 'MAS', dst: 'BZA', via: [], rakeType: 'VANDE_BHARAT' },
+  'wadi-csmt': { src: 'WADI', dst: 'CSMT', via: [], rakeType: 'LHB' }
+};
+document.querySelectorAll('[data-preset]').forEach((b) => {
+  b.onclick = () => {
+    const p = PRESETS[b.dataset.preset];
+    $('sel-src').value = p.src; $('sel-dst').value = p.dst; $('sel-rake').value = p.rakeType;
+    $('route-modal').style.display = 'none';
+    startRoute({ ...p, minutes: p.minutes ?? null });
+  };
+});
+$('btn-solve').onclick = () => {
+  const via = $('sel-via').value ? $('sel-via').value.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  $('route-modal').style.display = 'none';
+  startRoute({ src: $('sel-src').value, dst: $('sel-dst').value, via, rakeType: $('sel-rake').value, allStops: $('sel-rake').value === 'DEMU_PASSENGER' });
+};
+$('sel-roster').onchange = (e) => {
   const r = state.rosters[Number(e.target.value)];
   if (!r) return;
-  document.getElementById('sel-src').value = r.sourceCode;
-  document.getElementById('sel-dst').value = r.destCode;
-  document.getElementById('sel-rake').value = r.coachType;
-  const viaArr = r.viaCodesCsv ? r.viaCodesCsv.split(',').map(s => s.trim()).filter(Boolean) : [];
-  solveRouteFromApi(r.coachType === 'DEMU_PASSENGER', viaArr);
+  const via = r.viaCodesCsv ? r.viaCodesCsv.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  $('route-modal').style.display = 'none';
+  startRoute({ src: r.sourceCode, dst: r.destCode, via, rakeType: r.coachType, allStops: r.coachType === 'DEMU_PASSENGER' });
 };
-document.getElementById('preset-tpty-rc-wadi').onclick = () => {
-  document.getElementById('sel-src').value = 'TPTY'; document.getElementById('sel-dst').value = 'HYB';
-  document.getElementById('sel-via').value = 'GTL,RC,WADI'; document.getElementById('sel-rake').value = 'LHB';
-  solveRouteFromApi(false, ['GTL', 'RC', 'WADI']);
-};
-document.getElementById('preset-tpty-rc-gwd').onclick = () => {
-  document.getElementById('sel-src').value = 'TPTY'; document.getElementById('sel-dst').value = 'HYB';
-  document.getElementById('sel-via').value = 'RC'; document.getElementById('sel-rake').value = 'LHB';
-  solveRouteFromApi(false, ['GTL', 'RC', 'GWD']);
-};
-document.getElementById('preset-tpty-krnt').onclick = () => {
-  document.getElementById('sel-src').value = 'TPTY'; document.getElementById('sel-dst').value = 'HYB';
-  document.getElementById('sel-via').value = 'GTL,KRNT'; document.getElementById('sel-rake').value = 'LHB';
-  solveRouteFromApi(false, ['GTL', 'KRNT']);
-};
-document.getElementById('preset-gtl-krnt-pass').onclick = () => {
-  document.getElementById('sel-src').value = 'GTL'; document.getElementById('sel-dst').value = 'KRNT';
-  document.getElementById('sel-via').value = 'DHNE'; document.getElementById('sel-rake').value = 'DEMU_PASSENGER';
-  state.gameMinutes = 4 * 60 + 40;
-  solveRouteFromApi(true, ['DHNE']);
-};
-document.getElementById('btn-solve-route').onclick = () => solveRouteFromApi(false);
-document.getElementById('btn-save-roster').onclick = async () => {
+$('btn-save').onclick = async () => {
+  const src = $('sel-src').value, dst = $('sel-dst').value, via = $('sel-via').value, rake = $('sel-rake').value;
+  const pass = rake === 'DEMU_PASSENGER';
   try {
-    const src = document.getElementById('sel-src').value;
-    const dst = document.getElementById('sel-dst').value;
-    const via = document.getElementById('sel-via').value;
-    const isPass = state.rakeType === 'DEMU_PASSENGER';
-    const res = await fetch(`${API_BASE}/rosters`, {
+    await fetchJson(`${API_BASE}/rosters`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        trainNumber: isPass ? '77414' : '12799',
-        trainName: isPass ? 'Guntakal - Kurnool City Passenger (DEMU)' : `${src} - ${dst} Custom Express`,
-        priorityTier: isPass ? 'PASSENGER' : 'SUPERFAST',
-        coachType: state.rakeType, locoClass: isPass ? 'DEMU-1400HP' : 'WAP-7',
-        sourceCode: src, destCode: dst, viaCodesCsv: via,
-        haltsCsv: isPass ? 'GTL,MKR,TGL,EDD,PDL,LMD,MYL,DHNE,BVO,VDI,UKD,DUU,KRNT' : `${src},${via || 'GTL'},${dst}`
+        trainNumber: pass ? '77414' : '12799', trainName: pass ? 'Guntakal - Kurnool City Passenger (DEMU)' : `${src} - ${dst} Custom Express`,
+        priorityTier: pass ? 'PASSENGER' : 'SUPERFAST', coachType: rake, locoClass: pass ? 'DEMU-1400HP' : 'WAP-7',
+        sourceCode: src, destCode: dst, viaCodesCsv: via, haltsCsv: `${src},${via || ''},${dst}`.replace(/,,/g, ',')
       })
     });
-    if (!res.ok) throw new Error('Save failed');
-    await refreshSavedRosters();
-    alert('Custom roster saved to PostgreSQL.');
+    await refreshRosters();
+    toast('Roster saved to PostgreSQL', 'ok');
   } catch {
-    alert('Could not reach backend API. Verify Spring Boot is running on localhost:8080.');
+    toast(`Could not reach the API at ${API_BASE}`, 'warn');
   }
 };
-document.getElementById('btn-reverse-dir').onclick = () => {
-  state.reversedDirection = !state.reversedDirection;
-  state.trackZ = state.reversedDirection ? 2400 : 800;
-  document.getElementById('route-meta').textContent = state.reversedDirection
-    ? 'Inbound DHNE -> GTL • Descending ROR Flyover • VV Nagar Colony: LEFT'
-    : 'Outbound GTL -> DHNE • Climbing ROR Flyover • VV Nagar Colony: RIGHT';
-};
-document.getElementById('btn-n-up').onclick = () => { state.notch = Math.min(8, state.notch + 1); state.brake = 0; };
-document.getElementById('btn-n-dn').onclick = () => { state.notch = Math.max(0, state.notch - 1); };
-document.getElementById('btn-brk').onclick = () => { state.brake = Math.min(100, state.brake + 25); state.notch = 0; };
-document.getElementById('btn-horn').onclick = playDualHorn;
-document.getElementById('btn-switch').onclick = () => { state.onLoopTrack = !state.onLoopTrack; };
-document.getElementById('sel-cam').onchange = (e) => { state.camMode = Number(e.target.value); };
-document.getElementById('sel-weather').onchange = (e) => { state.weather = e.target.value; };
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyW') document.getElementById('btn-n-up').click();
-  if (e.code === 'KeyS') document.getElementById('btn-n-dn').click();
-  if (e.code === 'Space') document.getElementById('btn-brk').click();
-  if (e.code === 'KeyH') playDualHorn();
+
+// Camera: on-screen pad (press and hold) + arrow keys / +/- (held)
+document.querySelectorAll('#campad [data-cam]').forEach((btn) => {
+  const act = btn.dataset.cam;
+  const on = (e) => { e.preventDefault(); if (act === 'reset') rig.reset(); else rig.held.add(act); };
+  const off = () => rig.held.delete(act);
+  btn.addEventListener('pointerdown', on);
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, off);
 });
+const CAM_KEYS = { ArrowLeft: ['left', 'panL'], ArrowRight: ['right', 'panR'], ArrowUp: ['up', 'panU'], ArrowDown: ['down', 'panD'], Equal: ['in', 'in'], NumpadAdd: ['in', 'in'], Minus: ['out', 'out'], NumpadSubtract: ['out', 'out'] };
+window.addEventListener('keydown', (e) => {
+  const k = CAM_KEYS[e.code];
+  if (!k || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || $('auth').style.display === 'flex') return;
+  e.preventDefault();
+  rig.held.delete(k[0]); rig.held.delete(k[1]);
+  rig.held.add(e.shiftKey ? k[1] : k[0]);
+});
+window.addEventListener('keyup', (e) => { const k = CAM_KEYS[e.code]; if (k) { rig.held.delete(k[0]); rig.held.delete(k[1]); } });
+window.addEventListener('blur', () => rig.held.clear());
 
-// =========================================================================
-// 13. SHADER PRE-COMPILATION & 60 FPS SIMULATION LOOP
-// =========================================================================
-function updateSignalHUDAnd3D(aspect, featherText, featherLit) {
-  ['lamp-g', 'lamp-y2', 'lamp-y1', 'lamp-r'].forEach(id => document.getElementById(id).className = 'lamp');
-  if (aspect === 'RED') document.getElementById('lamp-r').classList.add('red');
-  if (aspect === 'YELLOW') document.getElementById('lamp-y1').classList.add('yellow');
-  if (aspect === 'DOUBLE_YELLOW') {
-    document.getElementById('lamp-y1').classList.add('yellow');
-    document.getElementById('lamp-y2').classList.add('yellow');
+window.addEventListener('keydown', async (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || $('auth').style.display === 'flex') return;
+  if (CAM_KEYS[e.code]) return;
+  if (e.repeat && e.code !== 'KeyW' && e.code !== 'KeyS') { if (e.code === 'Space') e.preventDefault(); return; }
+  await unlockAudio();
+  switch (e.code) {
+    case 'KeyW': notch(1); break;
+    case 'KeyS': notch(-1); break;
+    case 'Space': e.preventDefault(); brake(25); break;
+    case 'KeyR': state.brake = 0; state.emergency = false; break;
+    case 'KeyE': $('btn-emg').click(); break;
+    case 'KeyH': audio.hornStart(); break;
+    case 'KeyA': $('btn-auto').click(); break;
+    case 'KeyC': rig.setMode(rig.mode + 1); camSel.value = String(rig.mode); break;
+    default:
+      if (e.code === 'KeyL') toggleLights();
+      if (e.code === 'KeyI') toggleWipers();
+      if (e.code === 'KeyV') { const id = CAMERA_MODES[rig.mode].id; rig.setMode(CAMERA_MODES.findIndex((m) => m.id === (id === 'cab' ? 'crew' : 'cab'))); camSel.value = String(rig.mode); }
+      if (/^Digit[1-9]$/.test(e.code)) { rig.setMode(Number(e.code.slice(5)) - 1); camSel.value = String(rig.mode); }
   }
-  if (aspect === 'GREEN') document.getElementById('lamp-g').classList.add('green');
-  document.getElementById('signal-label').textContent = aspect;
-  document.getElementById('feather-label').textContent = featherText;
+});
+window.addEventListener('keyup', (e) => { if (e.code === 'KeyH') audio.hornStop(); });
+window.addEventListener('pointerdown', unlockAudio, { once: true });
 
-  if (signal3DLamps.r) {
-    signal3DLamps.g.material.color.setHex(aspect === 'GREEN' ? 0x22c55e : 0x1e293b);
-    signal3DLamps.y2.material.color.setHex(aspect === 'DOUBLE_YELLOW' ? 0xeab308 : 0x1e293b);
-    signal3DLamps.y1.material.color.setHex((aspect === 'YELLOW' || aspect === 'DOUBLE_YELLOW') ? 0xeab308 : 0x1e293b);
-    signal3DLamps.r.material.color.setHex(aspect === 'RED' ? 0xef4444 : 0x1e293b);
-    signal3DLamps.feather.material.color.setHex(featherLit ? 0xf8fafc : 0x334155);
+// ======================================================================
+// Simulation loop
+// ======================================================================
+const tmpV = new THREE.Vector3();
+let hudTimer = 0, lastSignalAspect = null, prevFront = 0, overspeedTimer = 0;
+
+function physics(dt) {
+  const R = RAKES[state.rakeType];
+  const v = state.speed;
+  const limit = ops.limitAt(state.sFront, consist.length);
+  if (state.incident) {
+    // after a collision / derailment the train scrapes to a stop
+    state.notch = 0; state.auto = false;
+    state.speed = Math.max(0, v - 6 * dt);
+    state.sFront += state.speed * dt * 0.6;
+    return limit;
+  }
+  if (state.auto) {
+    const { target: tk, stopDist } = ops.autoTarget(state.sFront, v, consist.length);
+    const target = tk / 3.6;
+    const err = target - v;
+    const need = Number.isFinite(stopDist) ? (v * v) / (2 * Math.max(0.5, stopDist - 2)) : 0;
+    if (need > 0.3) { state.notch = 0; state.brake = Math.min(100, Math.round((need / 1.1) * 125)); }
+    else if (err > 1.5) { state.notch = Math.min(8, Math.max(state.notch, 1) + (err > 6 ? 1 : 0)); state.brake = 0; }
+    else if (err > 0.3) { state.brake = 0; }
+    else if (err < -0.4) { state.notch = 0; state.brake = Math.min(100, Math.max(20, (-err) * 45)); }
+    else { state.notch = Math.max(0, state.notch - 1); }
+    if (target < 0.2 && v < 0.6) { state.notch = 0; state.brake = 60; }
+  }
+  // Kavach (Automatic Train Protection): brakes for red signals and overspeed
+  let brakePct = state.brake;
+  state.kavachActive = null;
+  if (state.kavach && !state.auto) {
+    const k = ops.kavach(state.sFront, v, consist.length);
+    if (k.demand > 0) {
+      state.kavachActive = k.reason;
+      brakePct = Math.max(brakePct, k.demand);
+      state.notch = 0;
+      if (!state._kavachToast) { toast(`KAVACH intervened: ${k.reason} — brakes applied`, 'warn', 3000); state._kavachToast = true; }
+    } else state._kavachToast = false;
+  }
+  const vmax = R.vmax / 3.6;
+  const tract = (state.notch / 8) * R.accel * Math.min(1, Math.pow(9 / Math.max(v, 0.1), 0.55)) * Math.max(0, 1 - Math.pow(v / (vmax * 1.04), 6));
+  const resist = v > 0.01 ? 0.008 + 0.0000085 * v * v : 0;
+  const grade = 9.81 * layout.path.gradeAt(state.sFront - consist.length / 2);
+  const wet = state.weather === 'MONSOON' ? 0.75 : 1;
+  const brk = state.emergency ? 1.45 * wet : (brakePct / 100) * 1.1 * wet;
+  let a = tract - resist - grade - (v > 0.01 ? brk : 0);
+  if (v <= 0.01 && a < 0) a = 0;
+  state.speed = Math.max(0, Math.min(vmax * 1.05, v + a * dt));
+  if (state.speed < 0.05 && state.emergency) state.emergency = false;
+  prevFront = state.sFront;
+  const end = layout.total - 32;
+  state.sFront = Math.min(end, state.sFront + state.speed * dt);
+  const kmh = state.speed * 3.6;
+
+  // Signal passed at danger. Policy: Kavach brakes before the signal; if it is
+  // off (or the driver overruns anyway) the train-stop trips the emergency brake
+  // as the signal is passed, the SPAD is logged, and any conflicting train ahead
+  // becomes a real collision risk.
+  for (const sig of ops.signalsAhead(prevFront - 0.01, 3)) {
+    if (sig.kind === 'Distant') continue;
+    if (sig.aspect === 'RED' && prevFront < sig.s && state.sFront >= sig.s) {
+      ops.spads++;
+      scorer.onSpad();
+      state.emergency = true; state.notch = 0; state.auto = false; syncAuto();
+      toast(`SPAD #${ops.spads}: ${sig.kind}${sig.label ? ' ' + sig.label : ''} at ${sig.st ? sig.st.name : 'block section'} passed at danger — train-stop applied emergency brake`, 'warn', 6000);
+    }
+  }
+  // Derailment: far beyond what a turnout, loop or curve can take
+  // only a sustained gross overspeed derails (a momentary spike does not)
+  const derail = ops.derailCheck(state.sFront, consist.length, kmh);
+  state.derailTimer = derail ? (state.derailTimer || 0) + dt : 0;
+  if (state.derailments) {
+    if (derail && state.derailTimer > 0.6) incident('derail', `DERAILED: ${derail}`);
+    else if (derail && !state._derailWarned) { state._derailWarned = true; toast(`DANGER: ${derail} — brake now!`, 'warn', 2000); }
+  } else if (derail && !state._derailWarned) {
+    // derailment switched off: a violent lurch through the points, a big score penalty, no crash
+    state._derailWarned = true;
+    scorer.add(-150, `Overspeed over points/curve: ${derail}`);
+    audio.pointThrow?.(); audio._clank?.(audio.ctx?.currentTime ?? 0, 0.5);
+    state.lurch = 1;
+    toast(`Heavy lurch! ${derail} — passengers thrown about (−150)`, 'warn', 3200);
+  }
+  if (!derail) state._derailWarned = false;
+  // Collision with another train, or a buffer stop at the end of the line
+  const hit = traffic.collision(state.sFront, consist.length, ops.lane);
+  if (hit) incident('collision', `COLLISION with ${hit.train.name || hit.train.consist.rakeType.replace('_', ' ')} (${hit.headOn ? 'head-on' : 'rear-end'}) at ${Math.round(kmh)} km/h`, hit.train);
+  if (state.sFront >= end - 0.5 && !state.incident) {
+    if (kmh > 12) incident('collision', `Hit the buffer stop at ${Math.round(kmh)} km/h`);
+    state.speed = 0;
+  }
+  if (kmh > limit + 4) {
+    overspeedTimer += dt;
+    if (overspeedTimer > 1.2) { overspeedTimer = 0; audio.beep(); if (kmh > limit + 12) toast(`OVERSPEED ${Math.round(kmh)}/${Math.round(limit)} km/h — derailment risk on turnouts & curves`, 'warn', 1800); }
+  } else overspeedTimer = 0;
+  return limit;
+}
+
+// ---------------------------------------------------------- incidents
+function incident(type, reason, aiTrain = null) {
+  if (state.incident) return;
+  state.incident = { type, reason, t: 0, ai: aiTrain, seed: Math.random() * 1000, k0: 0 };
+  if (aiTrain) aiTrain.stopped = true;
+  if (type === 'derail') {
+    const idx = consist.vehicles.findIndex((v) => ops.lane.inTransition(state.sFront - v.offset - v.length / 2) || layout.curveAt(state.sFront - v.offset));
+    state.incident.k0 = Math.max(0, idx);
+  }
+  audio.crash(type === 'derail' ? 0.8 : 1);
+  scorer.onIncident(type);
+  finishCareerRun({ completed: false, incident: type });
+  state.auto = false; syncAuto();
+  $('incident-title').textContent = type === 'derail' ? 'DERAILMENT' : 'COLLISION';
+  $('incident-reason').textContent = reason;
+  $('incident').style.display = 'flex';
+}
+
+function applyIncidentPose(dt) {
+  const inc = state.incident;
+  if (!inc) return;
+  inc.t += dt;
+  const amp = Math.min(1, inc.t / 1.3);
+  const rnd = (i) => { const x = Math.sin((i + 1) * 12.9898 + inc.seed) * 43758.5453; return x - Math.floor(x); };
+  consist.vehicles.forEach((v, i) => {
+    const g = v.group;
+    if (inc.type === 'derail') {
+      if (i < inc.k0) return;
+      const sgn = i % 2 ? 1 : -1, r = rnd(i), k = amp * Math.min(1, (i - inc.k0 + 1) / 3);
+      g.rotation.y += sgn * (0.12 + 0.4 * r) * k;
+      g.rotation.z += (r > 0.45 ? sgn * (0.25 + 0.9 * r) : 0.08 * sgn) * k;
+      g.translateX(sgn * (0.6 + 2.6 * r) * k);
+      g.position.y -= 0.35 * k;
+    } else {
+      if (i > 5) return;
+      const sgn = i % 2 ? 1 : -1, k = amp * (1 - i / 6);
+      if (i === 0) { g.rotation.x += 0.22 * k; g.rotation.z += 0.15 * k; g.position.y += 0.6 * k; }
+      else { g.rotation.y += sgn * 0.14 * k; g.rotation.z += sgn * 0.08 * k; g.translateX(sgn * 0.5 * k); }
+    }
+  });
+  if (inc.ai && inc.type === 'collision') {
+    inc.ai.consist.vehicles.slice(0, 4).forEach((v, i) => {
+      const k = amp * (1 - i / 4), sgn = i % 2 ? 1 : -1;
+      v.group.rotation.y += sgn * 0.16 * k; v.group.rotation.z -= sgn * 0.1 * k;
+      if (i === 0) { v.group.rotation.x -= 0.2 * k; v.group.position.y += 0.5 * k; }
+    });
   }
 }
 
-buildCorridorGeometry(true, GTL_KRNT_PASSENGER_STOPS);
-loadHubsAndRosters();
+function resumeFromLastStation() {
+  const nxt = ops.nextStation(state.sFront);
+  const idx = nxt ? Math.max(0, nxt.index - 1) : layout.stations.length - 2;
+  const st = layout.stations[idx];
+  if (st.isOrigin) ops.departedOrigin = true; else ops.dwell.set(st.index, st.dwellMin + 1);
+  state.incident = null;
+  state.speed = 0; state.notch = 0; state.brake = 0; state.emergency = false;
+  state.sFront = st.layout.pEnd - 14;
+  traffic.clearAll();
+  $('incident').style.display = 'none';
+  const p = layout.path.pointAt(state.sFront, 0);
+  world.update(state.sFront, p, { init: true });
+  rig.reset();
+  toast(`Resumed at ${st.name} ${ops.trackOf(st).name}`, 'ok');
+}
 
-// Pre-compile WebGPU/WebGL2 shaders upfront to eliminate first-frame stutter
-try {
-  await renderer.compileAsync(scene, camera);
-} catch { /* non-blocking if unsupported */ }
+function applySignals() {
+  for (const st of layout.stations) {
+    const sigs = world.stationSignals(st);
+    if (!sigs) continue;
+    if (sigs.home) {
+      const h = ops.homeAspect(st);
+      sigs.home.set(h.aspect, h.featherDir);
+      if (sigs.distant) sigs.distant.set(h.aspect === 'RED' ? 'YELLOW' : h.aspect === 'GREEN' ? 'GREEN' : 'DOUBLE_YELLOW');
+    }
+    const chosen = ops.choices.get(st.index);
+    for (const [no, m] of sigs.starters) m.set(no === chosen ? ops.starterAspect(st) : 'RED');
+  }
+  for (const sg of ops.ibs) if (sg.mesh) sg.mesh.set(ops.aspectOf(sg).aspect);
+}
 
-document.getElementById('backend-badge').textContent =
-  renderer.backend?.isWebGPUBackend ? 'WebGPU PBR Active' : 'WebGL2 PBR Fallback';
-const overlay = document.getElementById('loader-overlay');
-overlay.style.opacity = '0';
-setTimeout(() => overlay.remove(), 420);
+const fmtMin = (m) => `${Math.floor(m)}:${String(Math.floor((m % 1) * 60)).padStart(2, '0')}`;
 
-let lastTimeMs = performance.now();
+function handleEvents(events) {
+  for (const ev of events) {
+    const st = ev.st;
+    if (ev.type === 'arriving' && st.halt) {
+      const t = ops.trackOf(st);
+      const where = t.pf ? `platform number ${t.pf}` : 'the loop line';
+      stationAudio.say(`May I have your attention, please. Train number ${ops.trainNo.split('').join(' ')}, ${spokenName(layout.stations[0].name)} to ${spokenName(layout.stations[layout.stations.length - 1].name)} Express, is arriving on ${where}.`);
+      toast(`Arriving ${st.name} — ${t.name}`, 'ok');
+    }
+    if (ev.type === 'halted') {
+      const late = timetable.recordArrival(st, state.gameMinutes);
+      scorer.onHalt(st, state.sFront - ops.stopPoint(st), late);
+      state.haltedAt = st;
+      const lateTxt = late > 1 ? ` · late ${Math.round(late)} min` : ' · on time';
+      if (st.isDest) { toast(`Journey complete at ${st.name}${lateTxt}`, 'ok', 4000); setTimeout(showSummary, 2500); }
+      else if (st.reversal) toast(`Reversal at ${st.name}: the train must change direction — change the engine (panel on the right) before departure.`, 'warn', 7000);
+      else toast(`Halted at ${st.name} — scheduled stop ${st.dwellMin} min${lateTxt}`, 'ok', 4000);
+    }
+    if (ev.type === 'busy') {
+      const bt = st.busy?.train, tk = st.busy?.track;
+      toast(bt ? `${st.name}: ${tk?.pf ? 'platform ' + tk.pf : 'your line'} is occupied by ${bt.name} — home signal ON. Stop outside and wait, or pick another free line.` : `${st.name} is busy — home signal ON. Stop outside and wait for a platform.`, 'warn', 6000);
+    }
+    if (ev.type === 'busyClear') toast(`${st.name}: platform available, home signal cleared.`, 'ok');
+    if (ev.type === 'precedenceClear') toast(`${st.name}: precedence over — starter will clear.`, 'ok');
+    if (ev.type === 'ready') { toast(`${st.name}: right away! Starter signal cleared.`, 'ok'); audio.hornBlip(0.5); }
+  }
+}
+
+// ---------------------------------------------------------- stops editor
+function renderStopsPanel() {
+  const list = $('stops-list');
+  if (!list || !layout) return;
+  list.innerHTML = '';
+  for (const st of layout.stations) {
+    const row = document.createElement('div');
+    row.className = 'stop-row';
+    const passed = st.layout.pEnd < state.sFront || st.isOrigin;
+    const fixed = st.isOrigin || st.isDest;
+    row.innerHTML = `<label><input type="checkbox" ${st.halt ? 'checked' : ''} ${fixed || passed ? 'disabled' : ''}> <b>${st.code}</b> <span class="muted">${st.name} · ${st.platforms} PF</span></label>
+      <select ${fixed || passed ? 'disabled' : ''}>${[1, 2, 3, 5, 10, 15, 20].map((m) => `<option value="${m}" ${m === st.dwellMin ? 'selected' : ''}>${m} min</option>`).join('')}</select>`;
+    const cb = row.querySelector('input'), sel = row.querySelector('select');
+    cb.onchange = () => { st.halt = cb.checked; ops.refreshDefaults(); timetable.rebuild(); buildStripMap(); pfShownFor = null; renderTimetable(); };
+    sel.onchange = () => { st.dwellMin = Number(sel.value); timetable.rebuild(); pfShownFor = null; renderTimetable(); };
+    list.appendChild(row);
+  }
+}
+
+function updateHud(limit) {
+  const kmh = state.speed * 3.6;
+  $('speed').textContent = Math.round(kmh);
+  $('limit').textContent = `${Math.round(limit)}`;
+  const nl = ops.nextLimit(state.sFront, limit, 2500);
+  $('next-limit').textContent = nl ? `next ${Math.round(nl.limit)} in ${Math.round(nl.dist)} m` : '';
+  $('kavach-state').textContent = !state.kavach ? 'OFF' : state.kavachActive ? `BRAKING (${state.kavachActive})` : 'ON';
+  $('kavach-state').style.color = !state.kavach ? '#fca5a5' : state.kavachActive ? '#fbbf24' : '#86efac';
+  $('spads').textContent = String(ops.spads);
+  const vmax = RAKES[state.rakeType].vmax;
+  $('speedfill').style.width = `${Math.min(100, (kmh / vmax) * 100)}%`;
+  $('speedlim').style.left = `${Math.min(100, (limit / vmax) * 100)}%`;
+  $('notch').textContent = `N${state.notch}`;
+  $('brake').textContent = state.emergency ? 'EMERGENCY' : `${state.brake}%`;
+  const odoKm = Math.max(0, layout.realKmAt(state.sFront) - layout.realKmAt(layout.stations[0].layout.pEnd - 14));
+  $('odo').textContent = `${odoKm.toFixed(1)} km`;
+  trackCareerKm(odoKm);
+  const st = ops.currentStation(state.sFront);
+  const line = layout.lineAt(state.sFront);
+  let section = st ? `${st.name} yard` : (line === 'D' ? 'Double line' : 'Single line');
+  if (layout.gtl && state.sFront > layout.gtl.s0 && state.sFront < layout.gtl.s1) section = `Dhone diversion · VV Nagar ${world.gtl.vvSide}`;
+  $('section').textContent = section;
+
+  const halted = !!state.haltedAt && state.speed < 0.3;
+  const d = timetable.delay(state.gameMinutes, state.sFront, halted);
+  state.delay = d;
+  $('delay').textContent = d > 1 ? `Late ${Math.round(d)} min` : d < -1 ? `Ahead ${Math.round(-d)} min` : 'On time';
+  $('delay').style.color = d > 1 ? '#fca5a5' : '#86efac';
+  $('score').textContent = `${scorer.total()} · comfort ${Math.round(scorer.comfort)}%`;
+  const sigs = ops.signalsAhead(state.sFront, 1);
+  const sig = sigs[0];
+  for (const id of ['lamp-g', 'lamp-y1', 'lamp-y2', 'lamp-r']) $(id).className = 'lamp';
+  // Signal sighting: fog (worse at night) hides the aspect until close; the Fog Safe Device still counts down
+  const sighting = state.weather === 'FOG' ? (state.night > 0.5 ? 140 : 240) : state.weather === 'MONSOON' ? 450 : state.night > 0.5 ? 800 : Infinity;
+  if (sig && sig.s - state.sFront > sighting) {
+    $('sig-name').textContent = `FOG SAFE DEVICE · ${sig.kind === 'IBS' ? 'IBS' : sig.kind.toUpperCase()}`;
+    $('sig-aspect').textContent = 'NOT SIGHTED';
+    $('feather').textContent = `Visibility ~${sighting} m`;
+    $('sig-dist').textContent = `${Math.round(sig.s - state.sFront)} m`;
+  } else if (sig) {
+    const a = sig.aspect;
+    if (a === 'RED') $('lamp-r').classList.add('red');
+    if (a === 'YELLOW' || a === 'DOUBLE_YELLOW') $('lamp-y1').classList.add('yellow');
+    if (a === 'DOUBLE_YELLOW') $('lamp-y2').classList.add('yellow');
+    if (a === 'GREEN') $('lamp-g').classList.add('green');
+    $('sig-name').textContent = sig.kind === 'IBS' ? sig.label : `${sig.kind.toUpperCase()} · ${sig.st.code}`;
+    $('sig-aspect').textContent = a.replace('_', ' ');
+    $('feather').textContent = sig.featherDir ? `Route indicator ${sig.featherDir < 0 ? '◤ LEFT' : '◥ RIGHT'} → ${ops.trackOf(sig.st).name} (${LOOP_LIMIT} km/h)` : (sig.aspect === 'RED' && sig.reason ? sig.reason : '\u00a0');
+    $('sig-dist').textContent = `${Math.round(sig.s - state.sFront)} m`;
+    const key = sig.kind + (sig.st ? sig.st.index : sig.s) + a;
+    if (lastSignalAspect && key !== lastSignalAspect && a !== 'RED') { /* aspect change */ }
+    lastSignalAspect = key;
+  }
+  const nst = ops.nextStation(state.sFront);
+  if (nst) {
+    const realKm = layout.realKmAt(nst.layout.sCenter) - layout.realKmAt(state.sFront);
+    const halted = nst.halt && (ops.dwell.get(nst.index) || 0) > 0 && !ops.dwellDone(nst);
+    $('next-st').textContent = halted
+      ? `Halted at ${nst.name} · departs in ${fmtMin(ops.dwellLeft(nst))} (scheduled ${nst.dwellMin} min)`
+      : `${nst.halt ? `Next halt (${nst.dwellMin} min)` : 'Next'}: ${nst.name} · ${ops.trackOf(nst).name}`;
+    const stopIn = ops.stopPoint(nst) - state.sFront;
+    $('next-dist').textContent = halted ? '' : realKm > 1.2 ? `${realKm.toFixed(1)} km` : `${Math.max(0, Math.round(nst.halt ? stopIn : realKm * 1000))} m`;
+  } else {
+    $('next-st').textContent = 'Destination reached';
+    $('next-dist').textContent = '';
+  }
+  const frac = state.sFront / layout.total;
+  $('strip-me').style.left = `${frac * 100}%`;
+  $('strip-done').style.width = `${frac * 100}%`;
+  const hh = Math.floor(state.gameMinutes / 60), mm = Math.floor(state.gameMinutes % 60);
+  $('clock').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+let last = performance.now();
+let ttTimer = 0;
+let fpsAcc = 0, fpsN = 0;
 renderer.setAnimationLoop(() => {
-  const nowMs = performance.now();
-  const dt = Math.min((nowMs - lastTimeMs) / 1000, 0.05);
-  lastTimeMs = nowMs;
+  const now = performance.now();
+  const frameMs = now - last;
+  if (frameMs > 70 && layout && !busy) (window.__railsimFrames ||= []).push({ at: Math.round(state.sFront), ms: Math.round(frameMs), prev: world?.lastBuild || '' });
+  const rawDt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (!layout || busy) {
+    if (pipeline) pipeline.render(); else renderer.render(scene, camera);
+    return;
+  }
+  const dt = rawDt * state.simRate;
+  // Journey clock follows the distance compression while moving (real-km pace),
+  // and runs 8x while standing so dwell times pass in seconds.
+  const localScale = Math.max(1, (layout.realKmAt(state.sFront + 5) - layout.realKmAt(state.sFront - 5)) * 100);
+  const gameDt = (dt * (state.speed > 0.3 ? localScale : 8)) / 60;
+  state.gameMinutes = (state.gameMinutes + gameDt) % 1440;
 
-  // Natural 24-hour cycle (1 real hr = 24 game hrs)
-  state.gameMinutes = (state.gameMinutes + dt * 0.4) % 1440;
-  const hrs = Math.floor(state.gameMinutes / 60), mins = Math.floor(state.gameMinutes % 60);
-  document.getElementById('clock-txt').textContent = `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
-  const sunAngle = ((state.gameMinutes / 1440) * Math.PI * 2) - Math.PI / 2;
-  const dayFactor = Math.max(0.06, Math.sin(sunAngle));
-  sunLight.intensity = dayFactor * 2.8;
-  const nightIntensity = Math.max(0, 1.0 - dayFactor * 2.2) * 1200;
-  platformNightLights.forEach(l => { l.intensity = nightIntensity; });
+  const limit = physics(dt);
+  const events = ops.update(dt, { sFront: state.sFront, speed: state.speed, trainLen: consist.length, gameDt });
+  handleEvents(events);
+  consist.place(layout.path, ops.lane, state.sFront, 1);
+  stepEngineChange(dt);
+  trackJourney(dt, limit);
+  traffic.update(dt, state.sFront, state.speed, ops.lane, consist.length, state.gameMinutes);
+  applyIncidentPose(dt);
 
-  if (scene.background?.isColor) {
-    scene.background.setRGB(0.06 + dayFactor * 0.44, 0.10 + dayFactor * 0.64, 0.19 + dayFactor * 0.74);
+  const lead = consist.lead;
+  lead.group.getWorldPosition(tmpV);
+  const tw0 = performance.now();
+  world.update(state.sFront, camera.position.distanceTo(tmpV) > 400 ? camera.position : tmpV, { budget: 2, terrainBudget: 2 });
+  const tw = performance.now() - tw0;
+  if (tw > 25) (window.__railsimSpikes ||= []).push({ at: Math.round(state.sFront), ms: Math.round(tw), what: world.lastBuild });
+  world.updateSwitches(state.sFront, ops.lane, dt, (T) => {
+    const d = Math.abs(T.sToe - state.sFront);
+    audio.pointThrow(Math.max(0, 1 - d / 900));
+  });
+  applySignals();
+
+  const { night } = sky.update(state.gameMinutes, state.weather, camera, tmpV, rawDt);
+  state.night = night;
+  updateNightEmissives(night);
+  if (state.flash > 0) { // lightning
+    const f = state.flash * (0.6 + 0.4 * Math.sin(now * 0.09));
+    sky.hemi.intensity += f * 5;
+    renderer.toneMappingExposure += f * 0.7;
+    state.flash = Math.max(0, state.flash - rawDt * 4);
+  }
+  const lightsOn = state.lights === 'on' || (state.lights === 'auto' && (night > 0.12 || state.weather === 'FOG' || state.weather === 'MONSOON'));
+  if (consist.headlight) consist.headlight.intensity = lightsOn ? 80 + night * (state.weather === 'FOG' ? 900 : 1500) : 0; // bright but not blinding; fog scatters it into the beam instead
+  if (consist.beam) {
+    const fogK = state.weather === 'FOG' ? 1 : state.weather === 'MONSOON' ? 0.5 : 0;
+    consist.beam.material.opacity = lightsOn ? Math.min(0.45, night * 0.16 + fogK * (0.06 + night * 0.22)) : 0;
+    consist.beam.visible = consist.beam.material.opacity > 0.01 && !['cab', 'crew'].includes(CAMERA_MODES[rig.mode].id);
+  }
+  world.animate(dt, night, tmpV);
+  if (bloomNode) {
+    const fogGlow = state.weather === 'FOG' ? 0.22 : state.weather === 'MONSOON' ? 0.1 : 0;
+    bloomNode.strength.value = 0.14 + night * 0.18 + fogGlow;
+    bloomNode.threshold.value = 1.15 - night * 0.15 - fogGlow * 0.6;
+    bloomNode.radius.value = 0.4 + fogGlow;
   }
 
-  // Weather FX
-  rainPoints.visible = state.weather === 'MONSOON';
-  if (rainPoints.visible) {
-    rainPoints.position.set(playerTrain.position.x, 0, playerTrain.position.z - 20);
-  }
-  scene.fog.density = state.weather === 'FOG' ? 0.0082 : (state.weather === 'MONSOON' ? 0.0020 : 0.00036);
-
-  // Train Physics
-  const maxSpd = { VANDE_BHARAT: 160, LHB: 130, ICF: 110, DEMU_PASSENGER: 90, BOXN_GOODS: 75 }[state.rakeType];
-  const brakeGrip = state.weather === 'MONSOON' ? 0.65 : 1.0;
-  const accel = (state.notch * 1.45) - (state.brake * 0.16 * brakeGrip) - 0.12;
-  state.speedKmph = Math.max(0, Math.min(maxSpd, state.speedKmph + accel * dt * 4.5));
-
-  const dirSign = state.reversedDirection ? -1 : 1;
-  state.trackZ = Math.max(0, Math.min(state.maxTrackLength - 200, state.trackZ + dirSign * (state.speedKmph / 3.6) * dt));
-
-  const tf = getMainTrackTransform(state.trackZ, true);
-  playerTrain.position.set(tf.x, tf.y, tf.z);
-  playerTrain.rotation.y = tf.yaw + (state.reversedDirection ? Math.PI : 0);
-
-  // Keep Crisp Shadow Frustum Locked Around Player Train
-  sunLight.position.set(tf.x + Math.cos(sunAngle) * 140, tf.y + Math.max(35, Math.sin(sunAngle) * 180), tf.z + 75);
-  sunLight.target.position.set(tf.x, tf.y, tf.z - 25);
-
-  // Animate Platform People ONLY within 450m of the player train (60 FPS budget)
-  glbPassengerMixers.forEach(m => m.update(dt));
-  for (let i = 0; i < animatedPassengers.length; i++) {
-    const p = animatedPassengers[i];
-    if (Math.abs(state.trackZ - p.stationDistM) > 450) continue;
-    p.phase += dt * (p.isWalker ? 5.8 : 1.6);
-    if (p.isWalker) {
-      p.mesh.position.z += p.dir * p.walkSpeed * dt;
-      if (p.mesh.position.z > p.maxZ || p.mesh.position.z < p.minZ) {
-        p.dir *= -1;
-        p.mesh.rotation.y = p.dir > 0 ? 0 : Math.PI;
-      }
-      const swing = Math.sin(p.phase) * 0.42;
-      if (p.mesh.userData.leftLeg) {
-        p.mesh.userData.leftLeg.rotation.x = swing;
-        p.mesh.userData.rightLeg.rotation.x = -swing;
-        p.mesh.userData.leftArm.rotation.x = -swing * 0.7;
-        p.mesh.userData.rightArm.rotation.x = swing * 0.7;
-      }
-    } else if (p.mesh.userData.leftArm) {
-      p.mesh.userData.leftArm.rotation.z = Math.sin(p.phase) * 0.06;
-    }
+  rain.visible = state.weather === 'MONSOON';
+  if (rain.visible) {
+    rain.position.set(camera.position.x, camera.position.y - 20 + ((-now * 0.028) % 20 + 20) % 20, camera.position.z);
   }
 
-  // Single-Line Crossing Simulation at Pendekallu Loop
-  const crossingBanner = document.getElementById('crossing-banner');
-  if (!state.reversedDirection && state.trackZ > 3050 && state.trackZ < 4200) {
-    state.onLoopTrack = true;
-    state.aiTrainZ += 24 * dt;
-    if (state.trackZ < 3350) {
-      updateSignalHUDAnd3D('YELLOW', 'Route Feather ON — Enter Loop <= 30 km/h', true);
-      crossingBanner.style.display = 'none';
-    } else if (state.aiTrainZ < 4500) {
-      updateSignalHUDAnd3D('RED', 'Loop Line (30 km/h) — Wait for Goods Crossing', true);
-      crossingBanner.style.display = 'block';
-    } else {
-      updateSignalHUDAnd3D('GREEN', 'Crossing Complete — Clear to Proceed', false);
-      crossingBanner.style.display = 'none';
-    }
-  } else {
-    state.aiTrainZ = 2800;
-    updateSignalHUDAnd3D('GREEN', `Mainline ${maxSpd} km/h`, false);
-    crossingBanner.style.display = 'none';
+  const midIdx = Math.min(consist.vehicles.length - 1, Math.floor(consist.vehicles.length / 2));
+  if (lead.crew) lead.crew.lp.visible = CAMERA_MODES[rig.mode].id !== 'cab'; // we sit in the driver's seat in the front view
+  const wipersOn = state.wipers === 'on' || (state.wipers === 'auto' && state.weather === 'MONSOON');
+  animateWipers(lead, rawDt, wipersOn);
+  animateCrew(lead, consist.vehicles[consist.vehicles.length - 1], now / 1000, { throttle: Math.min(1, Math.max(0, state.notch) / 8), brake: state.emergency ? 1 : state.brake / 100, speed: state.speed });
+  rig.update(rawDt, {
+    lead, mid: consist.vehicles[midIdx], window: consist.vehicles[Math.min(3, consist.vehicles.length - 1)], tail: consist.vehicles[consist.vehicles.length - 1],
+    heading: Math.atan2(Math.sin(-lead.group.rotation.y), Math.cos(-lead.group.rotation.y)),
+    sFront: state.sFront, path: layout.path, lane: ops.lane
+  });
+
+  if (state.lurch > 0) { // camera shake for a violent lurch over points
+    camera.position.add(new THREE.Vector3((Math.random() - 0.5) * 0.35, (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.35).multiplyScalar(state.lurch));
+    state.lurch = Math.max(0, state.lurch - rawDt * 1.2);
   }
-  const aiTf = getMainTrackTransform(Math.max(0, Math.min(state.maxTrackLength - 200, 7200 - state.aiTrainZ)), false);
-  aiTrain.position.set(aiTf.x + (state.trackZ < 2400 ? 5.0 : 0), aiTf.y, aiTf.z);
-  aiTrain.rotation.y = aiTf.yaw + Math.PI;
+  if (state.incident && state.incident.t < 0.7) camera.position.add(new THREE.Vector3((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.5).multiplyScalar(1 - state.incident.t / 0.7));
+  audio.update(rawDt, {
+    speedKmph: state.speed * 3.6, notch: state.notch, brake: state.emergency ? 100 : state.brake,
+    traction: state.traction, onTurnout: ops.lane.inTransition(state.sFront - 6),
+    interior: CAMERA_MODES[rig.mode].kind === 'look', distanceStep: state.speed * dt, weather: state.weather, wipers: wipersOn,
+    curveR: layout.curveAt(state.sFront - 10)?.R || 0,
+    onBridge: layout.path.yAt(state.sFront) - layout.path.groundAt(state.sFront) > 3,
+    passing: nearestPassing()
+  });
+  const nearSt = layout.stationAt(state.sFront, 300);
+  stationAudio.update(rawDt, {
+    st: nearSt, distToPlatform: nearSt ? Math.max(0, nearSt.layout.pStart - state.sFront, state.sFront - consist.length - nearSt.layout.pEnd) : 9999,
+    interior: CAMERA_MODES[rig.mode].kind === 'look', speedKmph: state.speed * 3.6, ops, layout, now: state.gameMinutes,
+    ownHalted: !!state.haltedAt && state.speed < 0.3, timetable, trains: ops.trains()
+  });
 
-  // 6 Camera Perspectives
-  const fwd = state.reversedDirection ? 1 : -1;
-  if (state.camMode === 0) {
-    camera.position.set(tf.x, tf.y + 3.35, tf.z + fwd * 9.8);
-    camera.lookAt(tf.x, tf.y + 2.5, tf.z + fwd * 85);
-  } else if (state.camMode === 1) {
-    camera.position.set(tf.x + 2.15, tf.y + 3.2, tf.z + fwd * 8.2);
-    camera.lookAt(tf.x + 2.5, tf.y + 2.0, tf.z + fwd * 90);
-  } else if (state.camMode === 2) {
-    camera.position.set(tf.x + 15, tf.y + 10.5, tf.z - fwd * 29);
-    camera.lookAt(tf.x, tf.y + 2.6, tf.z + fwd * 20);
-  } else if (state.camMode === 3) {
-    camera.position.set(tf.x + 20, tf.y + 3.4, tf.z + fwd * 36);
-    camera.lookAt(tf.x, tf.y + 2.5, tf.z);
-  } else if (state.camMode === 4) {
-    camera.position.set(tf.x + 1.85, tf.y + 2.7, tf.z - fwd * 32);
-    camera.lookAt(tf.x + 42, tf.y + 2.3, tf.z - fwd * 32);
-  } else {
-    camera.position.set(tf.x + 48, tf.y + 68, tf.z + 48);
-    camera.lookAt(tf.x, tf.y, tf.z + fwd * 30);
-  }
+  hudTimer += rawDt;
+  if (hudTimer > 0.1) { hudTimer = 0; updateHud(limit); updatePlatformPanel(); updateEnginePanel(); updateDashboard(limit); }
+  ttTimer += rawDt;
+  if (ttTimer > 2) { ttTimer = 0; if ($('tt-panel').style.display === 'block') renderTimetable(); }
 
-  // HUD Updates
-  document.getElementById('speed-txt').textContent = Math.round(state.speedKmph);
-  document.getElementById('notch-txt').textContent = `N${state.notch}`;
-  document.getElementById('brake-txt').textContent = `${state.brake}%`;
-  document.getElementById('km-txt').textContent = (state.trackZ / 1000).toFixed(2);
+  if (pipeline) pipeline.render(); else renderer.render(scene, camera);
 
-  let statusTxt = 'Open Section';
-  if (state.trackZ >= 1000 && state.trackZ <= 2100) {
-    statusTxt = state.reversedDirection
-      ? 'Guntakal ROR Flyover — VV Nagar Colony on LEFT'
-      : 'Guntakal ROR Flyover — VV Nagar Colony on RIGHT';
-  } else {
-    const nearest = state.activeStations.find(s => Math.abs(state.trackZ - s.distM) < 260);
-    if (nearest) statusTxt = `At ${nearest.name}`;
-  }
-  document.getElementById('next-st-txt').textContent = statusTxt;
-
-  renderer.render(scene, camera);
+  fpsAcc += rawDt; fpsN++;
+  if (fpsAcc > 2) { window.__railsimFps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
 });
+
+// ======================================================================
+// Journey tracking, engine change, dashboard, timetable, recorder, summary
+// ======================================================================
+function trackJourney(dt, limit) {
+  const kmh = state.speed * 3.6;
+  const accel = (state.speed - (state._prevSpeed ?? state.speed)) / Math.max(dt, 1e-3);
+  state._prevSpeed = state.speed;
+  if (dt > 0) scorer.update(dt, { kmh, limit, accel, emergency: state.emergency, km: layout.realKmAt(state.sFront) });
+  if (state.haltedAt && state.speed > 0.5) { timetable.recordDeparture(state.haltedAt, state.gameMinutes); state.haltedAt = null; }
+  for (const st of layout.stations) {
+    if (!st.halt && !state.passed.has(st.index) && state.sFront > st.layout.sCenter) { state.passed.add(st.index); timetable.recordPass(st, state.gameMinutes); }
+  }
+  // level crossings: gates, bell, whistle boards
+  const bell = world.updateLevelCrossings(state.sFront, consist.length, dt);
+  audio.bellTick(dt, bell ? Math.max(0, 1 - Math.abs(bell.s - state.sFront) / 900) : 0);
+  for (const lc of world.lcs) {
+    if (prevFront < lc.wlS && state.sFront >= lc.wlS) { lc.window = true; lc.horned = false; if (state.auto) { audio.hornBlip(1.4); lc.horned = true; } }
+    if (lc.window && audio.hornHeld) lc.horned = true;
+    if (lc.window && prevFront < lc.s && state.sFront >= lc.s) { lc.window = false; scorer.onWhistle(lc.horned); }
+  }
+}
+
+function nearestPassing() {
+  let best = null;
+  for (const t of ops.trains()) {
+    const lo = t.dir > 0 ? t.s - t.consist.length : t.s, hi = t.dir > 0 ? t.s : t.s + t.consist.length;
+    const d = state.sFront < lo ? lo - state.sFront : state.sFront > hi ? state.sFront - hi : 0;
+    if (!best || d < best.dist) best = { dist: d, speed: t.v + state.speed, side: Math.sign(t.lane.at(state.sFront) - ops.lane.at(state.sFront)) * 0.7 };
+  }
+  return best;
+}
+
+// ---- engine change / reversal
+function updateEnginePanel() {
+  const st = state.haltedAt;
+  const show = st && state.speed < 0.3 && !state.engineChange && !st.isDest && (st.reversal || st.category !== 'station') && !(st.engineChanged && !st.reversal);
+  const panel = $('engine-panel');
+  panel.style.display = show ? 'block' : 'none';
+  if (!show) return;
+  const mu = isMultipleUnit(state.rakeType);
+  $('engine-title').textContent = st.reversal ? `Reversal at ${st.name}` : `Loco change at ${st.name} (optional)`;
+  $('engine-sub').textContent = mu ? 'Multiple unit: the loco pilot walks to the other driving cab.' : `Current engine: ${LOCOS[consist.loco || defaultLoco(state.rakeType)].label}`;
+  $('engine-select').style.display = mu ? 'none' : '';
+  $('btn-engine').textContent = mu ? 'Change ends' : 'Detach & attach engine';
+}
+
+function startEngineChange() {
+  const st = state.haltedAt;
+  if (!st || state.engineChange) return;
+  if (isMultipleUnit(state.rakeType)) { state.engineChange = { kind: 'cab', t: 0, st }; toast('Loco pilot changing ends…', 'ok'); return; }
+  const key = $('engine-select').value;
+  const old = consist.vehicles[0];
+  const coachFront = state.sFront - old.length - 0.9;
+  const newV = LOCOS[key].build();
+  newV.group.visible = false;
+  scene.add(newV.group);
+  state.engineChange = { kind: 'loco', t: 0, st, old, newV, coachFront, key };
+  audio.hornBlip(0.4);
+  toast(`Uncoupling ${LOCOS[consist.loco || defaultLoco(state.rakeType)].label}…`, 'ok');
+}
+
+function stepEngineChange(dt) {
+  const ec = state.engineChange;
+  if (!ec) return;
+  ec.t += dt;
+  const sm = (x) => { const t = Math.min(1, Math.max(0, x)); return t * t * (3 - 2 * t); };
+  if (ec.kind === 'cab') { if (ec.t > 10) finishEngineChange(ec); return; }
+  if (ec.t < 6) Consist.placeVehicle(ec.old, layout.path, ops.lane, ec.coachFront + 0.9 + ec.old.length / 2 + 140 * sm(ec.t / 6));
+  else ec.old.group.visible = false;
+  if (ec.t >= 6.5) {
+    ec.newV.group.visible = true;
+    Consist.placeVehicle(ec.newV, layout.path, ops.lane, ec.coachFront + 0.9 + ec.newV.length / 2 + 140 * (1 - sm((ec.t - 6.5) / 6)));
+  }
+  if (ec.t >= 12.5) {
+    ec.newV.group.removeFromParent();
+    consist.replaceLead(ec.newV);
+    consist.loco = ec.key;
+    state.traction = LOCOS[ec.key].traction;
+    state.sFront = ec.coachFront + 0.9 + ec.newV.length;
+    audio.crash(0.08); // coupling clank
+    finishEngineChange(ec);
+  }
+}
+
+function finishEngineChange(ec) {
+  ec.st.engineChanged = true;
+  state.engineChange = null;
+  toast(ec.kind === 'cab' ? 'Driving cab changed — brake continuity test OK' : `${LOCOS[consist.loco].label} coupled — brake continuity test OK`, 'ok', 3500);
+}
+
+// ---- cab dashboard (shown in the cab view)
+function updateDashboard(limit) {
+  const el = $('dash');
+  const cab = CAMERA_MODES[rig.mode].id === 'cab'; // gauges overlay in the driver's-eye front view
+  el.style.display = cab ? 'block' : 'none';
+  if (!cab) return;
+  const sig = ops.signalsAhead(state.sFront, 1)[0];
+  const brakeEff = state.emergency ? 100 : Math.max(state.brake, state.kavachActive ? 60 : 0);
+  drawDashboard(el, {
+    kmh: state.speed * 3.6, vmax: RAKES[state.rakeType].vmax, limit,
+    bp: state.emergency ? 0 : 5 - brakeEff * 0.016, mr: 8.8 + Math.sin(performance.now() / 4000) * 0.5,
+    amps: (state.notch / 8) * 1100 * (1 - Math.min(0.5, state.speed / 80)), traction: state.traction,
+    notch: state.notch, brake: brakeEff, emergency: state.emergency,
+    kavach: state.kavach, kavachMsg: state.kavachActive, aspect: sig ? sig.aspect : 'UNKNOWN',
+    sigLabel: sig ? (sig.kind === 'IBS' ? sig.label : `${sig.kind} ${sig.st.code}`) : '', sigDist: sig ? sig.s - state.sFront : null,
+    target: ops.nextLimit(state.sFront, limit, 2500),
+    delay: state.delay || 0, delayText: (state.delay || 0) > 1 ? `Late ${Math.round(state.delay)} min` : 'On time'
+  });
+}
+
+// ---- timetable panel
+function renderTimetable() {
+  if (!timetable) return;
+  const now = state.gameMinutes, halted = !!state.haltedAt && state.speed < 0.3;
+  const rows = timetable.rows.map((r) => {
+    const st = r.st, a = timetable.actual.get(st.index) || {};
+    const passed = st.layout.pEnd + 20 < state.sFront;
+    const eta = timetable.eta(r, now, state.sFront, halted);
+    let status = '';
+    if (st.isOrigin) status = a.dep !== undefined || ops.departedOrigin ? 'Departed' : 'Ready';
+    else if (passed) status = a.arr !== undefined ? `Arr ${fmtClock(a.arr)}${a.arr - r.arr > 1 ? ` (+${Math.round(a.arr - r.arr)})` : ''}` : a.pass !== undefined ? `Passed ${fmtClock(a.pass)}` : 'Passed';
+    else if (eta != null) status = `Exp ${fmtClock(eta)}`;
+    const halt = st.isOrigin || st.isDest ? '' : st.halt ? `${st.dwellMin}m` : 'pass';
+    return `<tr class="${passed ? 'done' : ''}"><td><b>${st.code}</b> ${st.name}</td><td>${r.arr == null ? '—' : fmtClock(r.arr)}</td><td>${r.dep == null ? '—' : st.halt || st.isOrigin ? fmtClock(r.dep) : '—'}</td><td>${halt}</td><td>${status}</td></tr>`;
+  }).join('');
+  $('tt-body').innerHTML = rows;
+  const d = state.delay || 0;
+  $('tt-sub').textContent = `${ops.trainNo} · ${d > 1 ? `running ${Math.round(d)} min late` : 'running on time'} · clock ${fmtClock(now)}`;
+}
+
+function showSummary() {
+  if (state.summaryShown) return;
+  state.summaryShown = true;
+  const st = layout.stations[layout.stations.length - 1];
+  const a = timetable.actual.get(st.index) || {};
+  const late = a.arr !== undefined ? a.arr - timetable.rows[st.index].arr : 0;
+  $('sum-stats').innerHTML = `
+    <div><span class="muted">Score</span><b>${scorer.total()}</b></div>
+    <div><span class="muted">Grade</span><b>${scorer.grade()}</b></div>
+    <div><span class="muted">Arrival</span><b>${late > 1 ? `${Math.round(late)} min late` : 'On time'}</b></div>
+    <div><span class="muted">Passenger comfort</span><b>${Math.round(scorer.comfort)}%</b></div>
+    <div><span class="muted">SPADs</span><b>${ops.spads}</b></div>
+    <div><span class="muted">Whistle boards</span><b>${scorer.whistleOk} ok / ${scorer.whistleMissed} missed</b></div>`;
+  $('sum-events').innerHTML = scorer.events.slice(-12).reverse().map((e) => `<div>${e.pts > 0 ? '+' : ''}${e.pts} · ${e.why}</div>`).join('');
+  const cr = finishCareerRun({ completed: true, late });
+  if (cr) $('sum-stats').insertAdjacentHTML('beforeend', `<div><span class="muted">Career XP</span><b>${cr.xp >= 0 ? '+' : ''}${cr.xp}${account.guest ? ' (guest — not saved)' : ''}</b></div>${cr.promoted ? `<div><span class="muted">PROMOTED</span><b>${cr.promoted.title}</b></div>` : ''}`);
+  $('summary').style.display = 'flex';
+  drawRecorder($('sum-chart'), scorer.trace, { title: `Speed recorder · ${layout.stations[0].code} → ${st.code}` });
+}
+
+$('btn-engine').onclick = () => startEngineChange();
+$('engine-select').innerHTML = Object.entries(LOCOS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+$('btn-timetable').onclick = () => { const m = $('tt-panel'); renderTimetable(); m.style.display = m.style.display === 'block' ? 'none' : 'block'; };
+$('btn-recorder').onclick = () => { const m = $('rec-panel'); m.style.display = m.style.display === 'flex' ? 'none' : 'flex'; drawRecorder($('rec-chart'), scorer.trace); };
+$('rec-close').onclick = () => { $('rec-panel').style.display = 'none'; };
+$('sum-close').onclick = () => { $('summary').style.display = 'none'; };
+$('sum-restart').onclick = () => { $('summary').style.display = 'none'; startRoute({ src: state.src, dst: state.dst, via: state.via, rakeType: state.rakeType, allStops: state.allStops }); };
+
+// ======================================================================
+// Account (login / guest) & career
+// ======================================================================
+const account = new Account();
+let careerRun = null;
+
+function trackCareerKm(odoKm) {
+  if (!careerRun || careerRun.done || state.incident) return;
+  const d = odoKm - careerRun.lastKm;
+  careerRun.lastKm = odoKm;
+  if (d > 0 && d < 2) { careerRun.km += d; account.addKm(d); } // ignore jumps (route restarts / teleports)
+}
+
+function finishCareerRun({ completed, late = 0, incident = null }) {
+  if (!careerRun || careerRun.done) return null;
+  if (!completed && !incident && careerRun.km < 0.5) { careerRun.done = true; return null; } // never really started
+  careerRun.done = true;
+  const r = account.finishRun({ route: careerRun.route, rake: careerRun.rake, km: careerRun.km, score: scorer ? scorer.total() : 0, late, spads: ops ? ops.spads : 0, completed, incident });
+  if (r.promoted) toast(`Promoted: ${r.promoted.title}!`, 'ok', 6000);
+  renderCareer();
+  return r;
+}
+
+function renderUserChip() {
+  $('user-chip').textContent = account.guest ? 'Guest · Log in' : `${account.email} · Log out`;
+  $('user-chip').title = account.guest ? 'Log in or sign up to save your career' : 'Log out';
+}
+
+function renderCareer() {
+  if ($('career-modal').style.display !== 'flex') return;
+  const c = account.career, r = rankOf(c.xp);
+  $('car-who').textContent = account.guest ? 'Playing as guest — progress is not saved. Log in to keep your career.' : `Saved to ${account.email}`;
+  $('car-rank').textContent = r.title;
+  $('car-duty').textContent = `· ${r.duty}`;
+  $('car-bar').style.width = `${Math.round(r.progress * 100)}%`;
+  $('car-next').textContent = r.next ? `${Math.floor(c.xp)} XP · ${Math.ceil(r.next.xp - c.xp)} XP to ${r.next.title}` : `${Math.floor(c.xp)} XP · top rank`;
+  const cell = (k, v) => `<div><span class="muted">${k}</span><b>${v}</b></div>`;
+  $('car-grid').innerHTML = cell('Distance', `${c.km.toFixed(1)} km`) + cell('Runs', `${c.completed}/${c.runs} done`) + cell('On time', c.onTime)
+    + cell('Best score', c.bestScore) + cell('SPADs', c.spads) + cell('Incidents', c.incidents);
+  $('car-hist').innerHTML = c.history.length ? c.history.map((h) => `<tr><td>${new Date(h.at).toLocaleDateString()}<br><span class="muted">${h.route}</span></td><td>${(RAKES[h.rake]?.label || h.rake).replace(/ \(.*\)/, '')}</td><td>${h.km}</td><td>${h.incident ? h.incident : h.completed ? (h.late > 2 ? `${h.late} min late` : 'On time') : 'Abandoned'}</td><td>${h.xp >= 0 ? '+' : ''}${h.xp}</td></tr>`).join('')
+    : '<tr><td colspan="5" class="muted">No runs yet — finish a journey to log it.</td></tr>';
+}
+
+// ---- login screen
+let authMode = 'login';
+function setAuthMode(m) {
+  authMode = m;
+  $('auth-tab-login').classList.toggle('on', m === 'login');
+  $('auth-tab-signup').classList.toggle('on', m === 'signup');
+  $('auth-go').textContent = m === 'login' ? 'Log in' : 'Create account';
+  $('auth-pass').autocomplete = m === 'login' ? 'current-password' : 'new-password';
+  $('auth-err').textContent = '';
+}
+function showAuth(msg = '') { $('auth').style.display = 'flex'; $('auth-err').textContent = msg; setTimeout(() => $('auth-email').focus(), 50); }
+function hideAuth() { $('auth').style.display = 'none'; }
+$('auth-tab-login').onclick = () => setAuthMode('login');
+$('auth-tab-signup').onclick = () => setAuthMode('signup');
+$('auth-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const email = $('auth-email').value, pass = $('auth-pass').value;
+  if (!Account.validEmail(email)) { $('auth-err').textContent = 'Please enter a valid email address'; return; }
+  if (!pass) { $('auth-err').textContent = 'Password is required'; return; }
+  $('auth-go').disabled = true;
+  try {
+    await (authMode === 'login' ? account.login(email, pass) : account.signup(email, pass));
+    $('auth-pass').value = '';
+    hideAuth();
+    toast(authMode === 'login' ? `Welcome back — ${rankOf(account.career.xp).title}` : 'Account created — your career is saved from now on', 'ok', 3500);
+  } catch (err) { $('auth-err').textContent = err.message; }
+  finally { $('auth-go').disabled = false; }
+};
+$('auth-guest').onclick = () => { if (!account.guest) return hideAuth(); account.continueAsGuest(); hideAuth(); };
+$('user-chip').onclick = async () => {
+  if (account.guest) { setAuthMode('login'); showAuth(); return; }
+  await account.logout();
+  toast('Logged out — driving as guest', 'ok', 2500);
+};
+$('btn-career').onclick = () => { $('career-modal').style.display = 'flex'; renderCareer(); };
+$('car-close').onclick = () => { $('career-modal').style.display = 'none'; };
+account.onChange = () => { renderUserChip(); renderCareer(); };
+renderUserChip();
+setInterval(() => account.save(), 60000);
+addEventListener('pagehide', () => account.save(true));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') account.save(true); });
+
+// resume a saved login, else ask (the sim keeps loading behind the screen)
+const authReady = account.resume().then((ok) => { if (!ok) showAuth(); })
+  .catch((e) => showAuth(e.offline ? 'Server is offline — log in later, or continue as guest' : e.message));
+if (params.get('guest') === '1') { account.continueAsGuest(); authReady.then(hideAuth); }
+
+// ======================================================================
+// Boot
+// ======================================================================
+loader.set('Loading hubs from PostgreSQL…', 8);
+await Promise.all([loadHubs(), preloadPassengerGlb(), loadStationManifest()]);
+// announcer voice: remembered choice, else Google Cloud when the backend says TTS is ready
+{
+  let mode = localStorageGet('railsim.voice');
+  if (!mode && state.backendOnline) {
+    try { const st = await fetchJson(`${API_BASE}/tts/status`, {}, 3000); mode = st.ready ? 'cloud' : 'browser'; } catch { mode = 'browser'; }
+  }
+  setVoice(mode || 'browser');
+}
+$('sel-src').value = 'GTL';
+$('sel-dst').value = 'SC';
+const bootPreset = PRESETS[params.get('route')] || PRESETS['gtl-sc'];
+await startRoute({ ...bootPreset, minutes: bootPreset.minutes ?? state.gameMinutes });
+window.__railsim = { state, account, start: startRoute, get layout() { return layout; }, get ops() { return ops; }, get world() { return world; }, get traffic() { return traffic; }, rig, camera, renderer };

@@ -3,3 +3,13 @@ databaseChangeLog:
       file: db/changelog/001-schema-and-seed.sql
   - include:
       file: db/changelog/002-tirupati-hyb-and-gtl-krnt-passenger.sql
+  - include:
+      file: db/changelog/003-gtl-flyover-dhone-left.sql
+  - include:
+      file: db/changelog/004-gtl-dhne-single-line.sql
+  - include:
+      file: db/changelog/005-anantapur-hub.sql
+  - include:
+      file: db/changelog/006-double-line-except-gtl-dhne.sql
+  - include:
+      file: db/changelog/007-users-and-career.sql
