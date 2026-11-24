@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Indian Railways 3D WebGPU Simulator (v5 High-Graphics)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body { overflow: hidden; background: #090d16; color: #f1f5f9; }
+    #loader-overlay {
+      position: fixed; inset: 0; background: #090d16; z-index: 99;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+      transition: opacity 0.4s ease;
+    }
+    #hud-top {
+      position: fixed; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between;
+      pointer-events: none; z-index: 10; gap: 10px; flex-wrap: wrap;
+    }
+    .panel {
+      background: rgba(15, 23, 42, 0.84); backdrop-filter: blur(12px);
+      border: 1px solid rgba(148, 163, 184, 0.28); border-radius: 10px;
+      padding: 10px 14px; pointer-events: auto; font-size: 13px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+    #hud-bottom {
+      position: fixed; bottom: 14px; left: 14px; right: 14px; display: flex;
+      justify-content: space-between; align-items: flex-end; pointer-events: none; z-index: 10; gap: 10px;
+    }
+    button, select, input {
+      background: #1e293b; color: #f8fafc; border: 1px solid #475569;
+      border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 12px;
+    }
+    button:hover { background: #334155; }
+    button.primary { background: #2563eb; border-color: #3b82f6; font-weight: 600; }
+    button.preset { background: #0f766e; border-color: #14b8a6; font-size: 11px; padding: 5px 8px; }
+    .signal-box { display: flex; align-items: center; gap: 8px; }
+    .lamp { width: 12px; height: 12px; border-radius: 50%; background: #334155; }
+    .lamp.red { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
+    .lamp.yellow { background: #eab308; box-shadow: 0 0 10px #eab308; }
+    .lamp.green { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+    #route-modal {
+      position: fixed; top: 86px; left: 12px; width: 420px; max-height: 75vh; overflow-y: auto;
+      display: none; z-index: 20;
+    }
+    .row { display: flex; gap: 6px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+    .badge { padding: 2px 7px; border-radius: 4px; background: #0f766e; font-size: 11px; font-weight: 600; }
+    #crossing-banner {
+      position: fixed; top: 90px; left: 50%; transform: translateX(-50%);
+      background: rgba(185, 28, 28, 0.94); padding: 8px 18px; border-radius: 8px;
+      font-weight: 700; display: none; z-index: 15; border: 1px solid #fca5a5;
+    }
+  </style>
+</head>
+<body>
+  <div id="loader-overlay">
+    <div style="font-size:20px;font-weight:700;letter-spacing:0.5px;">INDIAN RAILWAYS 3D WEBGPU SIMULATOR</div>
+    <div id="loader-msg" style="color:#94a3b8;font-size:13px;">Compiling WebGPU PBR Shaders, Platforms, Trains & Passengers...</div>
+  </div>
+
+  <div id="hud-top">
+    <div class="panel">
+      <strong id="route-title">77414 Guntakal Jn (GTL) -> Kurnool City (KRNT)</strong>
+      <div id="route-meta" style="color:#94a3b8; margin-top:2px;">Outbound GTL -> DHNE • ROR Flyover Active • VV Nagar: RIGHT</div>
+      <div class="row">
+        <button class="primary" id="btn-toggle-builder">Custom Route & Roster</button>
+        <button id="btn-reverse-dir">Flip GTL <-> DHNE (Test VV Nagar Side)</button>
+        <span class="badge" id="backend-badge">Initializing...</span>
+      </div>
+    </div>
+
+    <div class="panel signal-box">
+      <div>
+        <div style="font-size:11px;color:#94a3b8;">4-ASPECT MACL</div>
+        <div id="signal-label" style="font-weight:700;">GREEN (PROCEED)</div>
+        <div id="feather-label" style="font-size:11px;color:#fbbf24;">Mainline 130 km/h</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;background:#020617;padding:5px;border-radius:6px;">
+        <div id="lamp-g" class="lamp green"></div>
+        <div id="lamp-y2" class="lamp"></div>
+        <div id="lamp-y1" class="lamp"></div>
+        <div id="lamp-r" class="lamp"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div><strong>Time:</strong> <span id="clock-txt">07:15</span> (1h = 24h)</div>
+      <div class="row">
+        <select id="sel-weather">
+          <option value="CLEAR">Clear Sun</option>
+          <option value="MONSOON">Monsoon Rain</option>
+          <option value="FOG">Winter Fog (150m)</option>
+        </select>
+        <select id="sel-cam">
+          <option value="0">1. 3D Cab View</option>
+          <option value="1">2. Cab-Side Lean</option>
+          <option value="2" selected>3. External Chase</option>
+          <option value="3">4. Trackside Railfan</option>
+          <option value="4">5. Passenger Window</option>
+          <option value="5">6. Overhead Yard/Flyover</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div id="crossing-banner">SINGLE-LINE CROSSING: Hold on Loop Line — Oncoming BOXN Goods Train Passing!</div>
+
+  <div id="route-modal" class="panel">
+    <strong>Source-to-Destination Route & Roster Builder</strong>
+    <div class="row" style="margin-top:6px;">
+      <button class="preset" id="preset-tpty-rc-wadi">TPTY -> HYB (via Raichur & Wadi)</button>
+      <button class="preset" id="preset-tpty-rc-gwd">TPTY -> HYB (via Raichur & Gadwal)</button>
+      <button class="preset" id="preset-tpty-krnt">TPTY -> HYB (via Kurnool)</button>
+      <button class="preset" id="preset-gtl-krnt-pass">77414 GTL -> KRNT Passenger</button>
+    </div>
+    <div class="row">
+      <label>Saved Roster:</label>
+      <select id="sel-saved-roster" style="flex:1;"><option value="">-- Load from PostgreSQL --</option></select>
+    </div>
+    <div class="row"><label>From:</label><select id="sel-src"></select><label>To:</label><select id="sel-dst"></select></div>
+    <div class="row">
+      <label>Via Hub(s):</label>
+      <select id="sel-via">
+        <option value="">Auto Shortest</option>
+        <option value="GTL,RC,WADI">GTL, RC, WADI (Rayalaseema)</option>
+        <option value="GTL,KRNT">GTL, KRNT (Kurnool Line)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Train:</label>
+      <select id="sel-rake">
+        <option value="VANDE_BHARAT">Vande Bharat EMU (160 km/h)</option>
+        <option value="LHB" selected>WAP-7 + LHB Express (130 km/h)</option>
+        <option value="ICF">WDP-4D + ICF Express (110 km/h)</option>
+        <option value="DEMU_PASSENGER">77414 DEMU Local Passenger (90 km/h • All Stops)</option>
+        <option value="BOXN_GOODS">WAG-12B + 58-Wagon Goods (75 km/h)</option>
+      </select>
+    </div>
+    <div class="row">
+      <button class="primary" id="btn-solve-route">Build Live Route (GCP API)</button>
+      <button id="btn-save-roster">Save to PostgreSQL</button>
+    </div>
+    <div id="solved-stations" style="margin-top:10px;font-size:12px;color:#cbd5e1;line-height:1.5;"></div>
+  </div>
+
+  <div id="hud-bottom">
+    <div class="panel">
+      <div style="font-size:26px;font-weight:800;"><span id="speed-txt">0</span> <span style="font-size:12px;">km/h</span></div>
+      <div style="color:#94a3b8;">Notch: <strong id="notch-txt">N0</strong> | Brake: <strong id="brake-txt">0%</strong> | Km: <strong id="km-txt">0.00</strong></div>
+      <div id="next-st-txt" style="color:#38bdf8;margin-top:4px;">At Guntakal Jn (7 Platforms)</div>
+    </div>
+    <div class="panel">
+      <div class="row">
+        <button id="btn-n-up">Throttle + (W)</button>
+        <button id="btn-n-dn">Throttle - (S)</button>
+        <button id="btn-brk">Air Brake (Space)</button>
+        <button id="btn-horn">Dual Horn (H)</button>
+        <button id="btn-switch">Manual Loop Switch</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

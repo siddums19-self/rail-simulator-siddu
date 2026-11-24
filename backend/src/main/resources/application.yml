@@ -1,0 +1,16 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: indian-rail-sim-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5438/railsim}
+    username: ${DB_USER:railsim_user}
+    password: ${DB_PASS:railsim_pass}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
