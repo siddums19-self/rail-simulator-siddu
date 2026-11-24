@@ -4,7 +4,7 @@
 #   gcloud builds submit . --config frontend/cloudbuild.yaml
 substitutions:
   _REGION: asia-south1
-  _REPO: railsim-repo
+  _REPO: cloud-run-source-deploy   # existing Artifact Registry repo (asia-south1)
   _SERVICE: rail-simulator-fe
   _API_BASE: https://rail-simulator-be-744714946530.asia-south1.run.app/api
   _RUN_SA: 744714946530-compute@developer.gserviceaccount.com

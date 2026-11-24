@@ -14,7 +14,7 @@ export REGION="asia-south1"                             # Mumbai
 export SQL_INSTANCE="${SQL_INSTANCE:-rail-simulator}"   # existing Cloud SQL instance (db-f1-micro)
 export DB_NAME="${DB_NAME:-railsim}"                    # database inside it (Liquibase creates the tables)
 export DB_SECRET="${DB_SECRET:-railsim-db-password}"    # Secret Manager secret with the DB password
-export REPO_NAME="railsim-repo"                         # Artifact Registry (docker)
+export REPO_NAME="cloud-run-source-deploy"              # existing Artifact Registry repo (docker)
 # identity of both Cloud Run services; Cloud Build also runs as it in newer projects
 export SA_EMAIL="${SA_EMAIL:-744714946530-compute@developer.gserviceaccount.com}"
 # =====================
