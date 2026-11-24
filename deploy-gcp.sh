@@ -3,8 +3,8 @@
 #   ./deploy-gcp.sh            setup + deploy both
 #   ./deploy-gcp.sh be | fe    deploy just one (skips setup)
 # Each service can also be deployed on its own:
-#   gcloud builds submit backend  --config backend/cloudbuild.yaml
-#   gcloud builds submit frontend --config frontend/cloudbuild.yaml
+#   gcloud builds submit . --config backend/cloudbuild.yaml
+#   gcloud builds submit . --config frontend/cloudbuild.yaml
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -69,12 +69,12 @@ fi
 
 if [[ "$TARGET" == "all" || "$TARGET" == "be" ]]; then
   echo "5. Backend: Cloud Build -> rail-simulator-be"
-  gcloud builds submit backend --config backend/cloudbuild.yaml
+  gcloud builds submit . --config backend/cloudbuild.yaml
 fi
 
 if [[ "$TARGET" == "all" || "$TARGET" == "fe" ]]; then
   echo "6. Frontend: Cloud Build -> rail-simulator-fe"
-  gcloud builds submit frontend --config frontend/cloudbuild.yaml
+  gcloud builds submit . --config frontend/cloudbuild.yaml
 fi
 
 echo "============================================================"

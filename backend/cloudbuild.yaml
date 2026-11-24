@@ -1,6 +1,7 @@
 # Backend: build the Spring Boot image and deploy it to Cloud Run (rail-simulator-be).
-# Run from the repo root:
-#   gcloud builds submit backend --config backend/cloudbuild.yaml
+# Cloud Build trigger: config file backend/cloudbuild.yaml, included files backend/**
+# Manual, from the repo root:
+#   gcloud builds submit . --config backend/cloudbuild.yaml
 substitutions:
   _REGION: asia-south1
   _REPO: railsim-repo
@@ -17,6 +18,7 @@ options:
 steps:
   - id: build
     name: gcr.io/cloud-builders/docker
+    dir: backend
     args:
       - build
       - -t
