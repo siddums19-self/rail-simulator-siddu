@@ -46,6 +46,10 @@ const loader = {
   show() { const el = $('loader'); el.style.display = 'flex'; el.style.opacity = '1'; },
   hide() { const el = $('loader'); el.style.opacity = '0'; setTimeout(() => { el.style.display = 'none'; }, 500); }
 };
+// show load/runtime errors on screen (phones/tablets have no visible console)
+const showErr = (msg) => { try { const el = $('loader-msg'); if (el) el.textContent = `Error: ${msg}`; console.error('[railsim]', msg); } catch { /* ignore */ } };
+addEventListener('error', (e) => showErr(e.message || String(e.error)));
+addEventListener('unhandledrejection', (e) => showErr(e.reason?.message || String(e.reason)));
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
 // ======================================================================
@@ -57,6 +61,9 @@ const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in win
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isPhoneUA = /Android|Mobi|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.userAgentData?.mobile === true;
 const isMobile = () => isIOS || isPhoneUA; // real phones/tablets only, not touchscreen laptops
+// tablets (iPad, big Android tablets) have far more GPU memory than phones: keep them on the old medium settings
+const isTablet = () => (/iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) || (/Android/i.test(navigator.userAgent) && !/Mobi/i.test(navigator.userAgent)));
+const isPhone = () => isMobile() && !isTablet();
 const syncDevice = () => {
   document.body.classList.toggle('mobile', isMobile() || innerWidth < 760);
   document.body.classList.toggle('touch', isTouch);
@@ -65,9 +72,9 @@ const syncDevice = () => {
 syncDevice();
 addEventListener('resize', syncDevice);
 addEventListener('orientationchange', () => setTimeout(syncDevice, 200));
-let qualityKey = params.get('q') || localStorageGet('railsim.quality') || (isMobile() ? 'low' : 'high');
+let qualityKey = params.get('q') || localStorageGet('railsim.quality') || (isPhone() ? 'low' : isMobile() ? 'medium' : 'high');
 // phones run out of GPU memory / hang above medium; ignore a stale saved 'high'/'ultra' unless forced via ?q=
-if (isMobile() && !params.get('q') && qualityKey !== 'low' && qualityKey !== 'medium') qualityKey = 'low';
+if (isMobile() && !params.get('q') && qualityKey !== 'low' && qualityKey !== 'medium') qualityKey = isPhone() ? 'low' : 'medium';
 let Q = QUALITY[qualityKey] || QUALITY.high;
 
 const renderer = new THREE.WebGPURenderer({ antialias: !Q.post, powerPreference: 'high-performance', forceWebGL: params.has('webgl') || (isMobile() && !params.has('webgpu')) });
@@ -85,7 +92,7 @@ loader.set('Initialising WebGPU…', 5);
 await renderer.init();
 const isWebGPU = !!renderer.backend?.isWebGPUBackend;
 setMaxAnisotropy(isMobile() ? 2 : (renderer.getMaxAnisotropy ? renderer.getMaxAnisotropy() : 8));
-if (isMobile()) setTextureScale(0.5); // phones: quarter-size procedural textures (GPU memory + load time)
+if (isPhone()) setTextureScale(0.5); // phones: quarter-size procedural textures (GPU memory + load time)
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 7000);
