@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>Indian Railways 3D Simulator v6</title>
   <style>
     :root {
@@ -24,7 +26,7 @@
     #loader .bar { width: 320px; height: 4px; background: #1e293b; border-radius: 4px; overflow: hidden; }
     #loader .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
     #loader-msg { color: var(--muted); font-size: 13px; }
-    .panel { background: var(--panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line);
+    .panel { background: var(--panel-solid, rgba(15,22,36,.94)); contain: layout paint; border: 1px solid var(--line);
       border-radius: 12px; padding: 10px 14px; pointer-events: auto; font-size: 12.5px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
     .hud { position: fixed; pointer-events: none; z-index: 10; display: flex; gap: 10px; }
     #top { top: 12px; left: 12px; right: 12px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
@@ -35,6 +37,10 @@
     button.primary { background: var(--blue); border-color: #60a5fa; font-weight: 600; }
     button.on { background: #15803d; border-color: #22c55e; }
     button.preset { background: #0f766e; border-color: #14b8a6; font-size: 11px; padding: 5px 8px; }
+    button.preset.named { background: #1e3a8a; border-color: #3b82f6; text-align: left; flex: 1 1 46%; font-weight: 700; }
+    button.preset small { display: block; font-weight: 400; opacity: .8; font-size: 10.5px; margin-top: 1px; }
+    #route-modal .sec { margin-top: 12px; font-size: 10.5px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+    #route-modal .lbl { width: 64px; }
     .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 7px; }
     .muted { color: var(--muted); }
     .title { font-weight: 700; font-size: 14px; }
@@ -82,6 +88,150 @@
     #pf-lock { font-size: 10px; color: #fca5a5; margin-top: 4px; }
     /* route builder */
     #route-modal { position: fixed; top: 92px; left: 12px; width: 440px; max-height: 76vh; overflow-y: auto; display: none; z-index: 20; }
+    #home { position: fixed; inset: 0; z-index: 60; display: none; align-items: flex-start; justify-content: center; background: radial-gradient(ellipse at top, rgba(15,40,80,.94), rgba(2,6,23,.98)); overflow-y: auto; }
+    .home-in { width: 920px; max-width: calc(100vw - 32px); padding: 6vh 0 24px; }
+    .home-title { font-size: 34px; font-weight: 800; letter-spacing: .5px; }
+    .home-sub { color: var(--muted); margin-top: 4px; }
+    #home-guest input { flex: 1; background: #1b2638; color: var(--text); border: 1px solid #34465f; border-radius: 7px; padding: 7px 10px; }
+    .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 18px; }
+    .tile { cursor: pointer; text-align: left; padding: 18px; border-radius: 14px; background: linear-gradient(160deg, #16233a, #0f1a2c); border: 1px solid #2c3e5a; min-height: 130px; display: flex; flex-direction: column; gap: 6px; }
+    .tile:hover { border-color: #60a5fa; background: linear-gradient(160deg, #1b2c49, #12203a); }
+    .tile b { font-size: 17px; } .tile small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .tile .ti { font-size: 26px; } .tile.small { min-height: 0; }
+    .tile-opts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+    @media (max-width: 700px) { .tiles { grid-template-columns: 1fr; } }
+    .seg { gap: 0; } .seg button { border-radius: 0; } .seg button:first-child { border-radius: 7px 0 0 7px; } .seg button:last-child { border-radius: 0 7px 7px 0; }
+    .seg button.on { background: var(--blue); border-color: #60a5fa; }
+    .stats-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px; }
+    .stats-table th, .stats-table td { text-align: left; padding: 6px; border-bottom: 1px solid #1f2a3d; }
+    .stats-table tr.me td { color: #fde047; }
+    .stats-mine { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 6px; }
+    .stats-mine div { background: #111a2b; border-radius: 8px; padding: 7px 9px; font-size: 12px; }
+    body.sm3d .hud, body.sm3d #pf-panel, body.sm3d #campad, body.sm3d #hint { display: none !important; }
+    .dash-sec { margin-top: 8px; border-radius: 9px; padding: 2px 6px 6px; }
+    .dash-sec.arrivals { background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.35); }
+    .dash-sec.departures { background: rgba(34,197,94,.07); border: 1px solid rgba(34,197,94,.35); }
+    .dash-h { cursor: pointer; font-weight: 800; font-size: 12px; letter-spacing: .4px; padding: 6px 2px 2px; user-select: none; }
+    .arrivals .dash-h { color: #93c5fd; } .departures .dash-h { color: #86efac; }
+    .dash-h .cnt { float: right; background: #1e293b; border-radius: 9px; padding: 0 7px; font-size: 11px; }
+    .sec-card.arr { border-left: 3px solid #3b82f6; } .sec-card.arr.urgent { border-left-color: #ef4444; }
+    .sec-card.dep { border-left: 3px solid #22c55e; } .sec-card.dep.ready { box-shadow: inset 0 0 0 1px #22c55e; }
+    .sec-card .rd { color: #4ade80; }
+    .sec-h { margin-top: 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 700; }
+    .pfrow button.pfb { padding: 4px 7px; font-size: 11px; }
+    .pfrow button.pfb.halt:not(:disabled) { border-color: #3b82f6; } .pfrow button.pfb.pass:not(:disabled) { border-color: #22c55e; }
+    .pfrow button.pfb.loop { font-style: italic; }
+    .pfrow button.pfb.chosen, .pfrow button.pfb.chosen:disabled { background: #facc15; color: #111; opacity: 1; font-weight: 700; }
+    .sel-st { margin-top: 6px; padding: 5px 7px; border-radius: 6px; font-size: 11.5px; }
+    .sel-st.pend { background: rgba(250,204,21,.15); border: 1px solid #facc15; } .sel-st.lock { background: rgba(34,197,94,.13); border: 1px solid #22c55e; }
+    .sel-st span { color: #cbd5e1; font-size: 11px; } .sel-st button.mini { padding: 2px 7px; font-size: 10.5px; margin-left: 4px; }
+    .sel-err { margin-top: 5px; color: #fca5a5; font-size: 11.5px; background: rgba(239,68,68,.12); border-radius: 6px; padding: 4px 7px; }
+    .mode-switch { display: flex; margin-top: 6px; } .mode-switch button { flex: 1; font-size: 11px; font-weight: 700; padding: 5px 4px; border-radius: 0; }
+    .mode-switch button:first-child { border-radius: 7px 0 0 7px; } .mode-switch button:last-child { border-radius: 0 7px 7px 0; }
+    .mode-switch button.on.halt { background: #1d4ed8; border-color: #60a5fa; } .mode-switch button.on.pass { background: #15803d; border-color: #22c55e; }
+    .sec-card button.on, .sec-card button.go { background: #15803d; border-color: #22c55e; } .sec-card button.go { font-weight: 700; }
+    /* ---------- phones & tablets (body.mobile is set from the device and screen size) ---------- */
+    .mobile-only { display: none; }
+    #mp-panel { position: fixed; right: 12px; top: 200px; width: 290px; z-index: 22; display: none; font-size: 12px; }
+    #mp-table { width: 100%; border-collapse: collapse; margin-top: 6px; } #mp-table td { padding: 3px 4px; border-bottom: 1px solid #1f2a3d; }
+    #mp-table tr.me td { color: #fde047; }
+    .mp-dot { position: absolute; top: -3px; width: 8px; height: 8px; border-radius: 50%; border: 1px solid #000; transform: translateX(-50%); }
+    #photo-bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 50; display: none; gap: 10px; align-items: center; }
+    body.photo .hud, body.photo #campad, body.photo #hint, body.photo #pf-panel, body.photo #mp-panel { display: none !important; }
+    body.photo #photo-bar { display: flex; }
+    #ach-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 8px; }
+    #ach-list div { background: #111a2b; border-radius: 8px; padding: 6px 8px; font-size: 11.5px; opacity: .45; } #ach-list div.got { opacity: 1; outline: 1px solid #22c55e; }
+    body.mobile #mp-panel { top: auto; bottom: 150px; right: 6px; width: min(260px, 60vw); }
+    /* toolbar: grouped, icons via data-i (text can change without losing the icon), clear on/off toggles */
+    .tb-group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(148,163,184,.15); }
+    .tb-group:first-of-type { border-top: 0; padding-top: 0; }
+    .tb-h { width: 100%; font-size: 9.5px; letter-spacing: .7px; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+    button[data-i]::before { content: attr(data-i); margin-right: 5px; }
+    button.tog { position: relative; padding-right: 22px; }
+    button.tog::after { content: ''; position: absolute; right: 8px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: #475569; }
+    button.tog.on::after { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+    button.mainmenu { padding: 2px 9px; font-size: 15px; margin-right: 6px; }
+    #route-title { display: flex; align-items: center; gap: 6px; }
+    html, body { height: 100%; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+    body.mobile { font-size: 12px; }
+    body.mobile .mobile-only { display: inline-block; }
+    body.mobile button, body.mobile select { font-size: 11px; padding: 5px 7px; min-height: 30px; }
+    body.mobile .panel { padding: 7px 9px; border-radius: 10px; }
+    body.mobile #top { top: max(6px, env(safe-area-inset-top)); left: 6px; right: 6px; gap: 6px; }
+    body.mobile #top > .panel:first-child { max-width: calc(100vw - 12px) !important; }
+    body.mobile #top > .panel:first-child .tb-group, body.mobile #top > .panel:first-child #route-meta { display: none; }
+    body.mobile.menu-open #top > .panel:first-child .tb-group { display: flex; }
+    body.mobile.menu-open #top > .panel:first-child { max-height: 70vh; overflow-y: auto; }
+    body.mobile #top > .panel:nth-child(3) { display: none; }
+    body.mobile.menu-open #top > .panel:nth-child(3) { display: block; }
+    body.mobile #route-title { font-size: 12.5px; display: flex; gap: 8px; align-items: center; }
+    body.mobile #btn-menu { padding: 2px 9px; font-size: 16px; min-height: 28px; }
+    body.mobile #sig { transform: scale(0.82); transform-origin: top right; }
+    body.mobile #bottom { left: 6px; right: 6px; bottom: max(6px, env(safe-area-inset-bottom)); gap: 6px; }
+    body.mobile #speedo .kv, body.mobile #speedo #next-limit { display: none; }
+    body.mobile #speedo .big { font-size: 30px; } body.mobile #speedo { min-width: 0 !important; width: auto !important; max-width: 36vw; }
+    body.mobile #controls { max-width: 58vw; } body.mobile #controls .row { flex-wrap: wrap; gap: 4px; }
+    body.mobile #controls button { flex: 1 1 30%; }
+    body.mobile #campad { transform: scale(0.8); transform-origin: bottom right; right: 4px; bottom: 150px; }
+    body.mobile #hint, body.mobile #strip { display: none !important; }
+    body.mobile .modal .panel, body.mobile #route-modal { width: calc(100vw - 16px) !important; max-width: calc(100vw - 16px) !important; left: 8px; max-height: 82vh; }
+    body.mobile #pf-panel { max-width: 56vw; font-size: 11px; }
+    body.mobile .home-in { padding-top: 3vh; } body.mobile .home-title { font-size: 26px; }
+    body.mobile .tile { min-height: 0; padding: 14px; } body.mobile .tile b { font-size: 15px; }
+    /* Station Master on small screens: one scrolling top bar, dashboard as a bottom sheet, compact board */
+    body.mobile #sm-top { flex-wrap: nowrap; overflow-x: auto; top: max(6px, env(safe-area-inset-top)); left: 6px; right: 6px; padding: 5px 6px; }
+    body.mobile #sm-top > * { flex: 0 0 auto; } body.mobile #sm-title { display: none; } body.mobile #sm-info { margin-left: 6px; }
+    body.mobile #sm-side { top: auto; bottom: 56px; left: 6px; right: 6px; width: auto; max-height: 46vh; }
+    body.mobile #sm.min #sm-side { right: auto; top: auto; bottom: max(64px, calc(env(safe-area-inset-bottom) + 58px)); left: 6px; }
+    body.mobile #sm-pfs { top: 56px; bottom: auto; right: 6px; width: min(300px, 52vw); max-height: 30vh; font-size: 10.5px; }
+    body.mobile #sm-pfs td:nth-child(3), body.mobile #sm-pfs td:nth-child(4) { white-space: normal; }
+    body.mobile #sm-cam { bottom: max(6px, env(safe-area-inset-bottom)); } body.mobile #sm-cam button { width: 40px; height: 36px; }
+    body.mobile .sm-tag .tag-menu { width: 240px; }
+    body.mobile #sec { flex-direction: column; } body.mobile #sec-panel { width: auto; max-height: 45vh; margin: 6px; }
+    body.mobile.portrait #sm-side { max-height: 40vh; }
+    #sm { position: fixed; inset: 0; z-index: 40; display: none; background: #04070b; }
+    #sm-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: manipulation; }
+    #sm-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+    .sm-tag { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer; background: rgba(4,7,11,.78); color: #e2e8f0; border: 1.5px solid #64748b; border-left-width: 5px; border-radius: 6px; padding: 2px 7px; font-size: 11px; line-height: 1.3; white-space: nowrap; }
+    .sm-tag i { color: #94a3b8; font-style: normal; } .sm-tag.sel { background: #facc15; color: #111; } .sm-tag.sel i { color: #333; }
+    .sm-tag.ready { box-shadow: 0 0 0 2px #22c55e; } .sm-tag.ready i { color: #4ade80; }
+    #sm-top { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 7px 10px; }
+    #sm-top #sm-title { font-size: 13px; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sm-top { gap: 6px !important; } #sm-top button, #sm-top select { padding: 5px 8px; font-size: 11.5px; }
+    #sm-info { display: flex; gap: 6px; margin-left: auto; }
+    #sm-info .sm-stat { padding: 3px 9px; } #sm-info .sm-stat b { font-size: 15px; display: inline; margin-right: 4px; }
+    button.danger { background: #7f1d1d; border-color: #ef4444; }
+    #sm-side { position: absolute; top: 66px; left: 10px; bottom: 10px; width: 300px; overflow-y: auto; }
+    #sm-pfs { position: absolute; right: 10px; bottom: 10px; width: 380px; max-height: 42vh; overflow-y: auto; padding: 8px 10px; font-size: 11.5px; }
+    #sm-pfs table { width: 100%; border-collapse: collapse; } #sm-pfs td { padding: 3px 4px; border-bottom: 1px solid #1f2a3d; white-space: nowrap; }
+    #sm-pfs td.ln { color: #7dd3fc; font-weight: 700; } #sm-pfs .pfs-h { font-weight: 700; margin-bottom: 4px; }
+    #sm-pfs .free { color: #64748b; } #sm-pfs .mv { color: #facc15; } #sm-pfs .dw { color: #93c5fd; } #sm-pfs .rd { color: #4ade80; font-weight: 700; } #sm-pfs .rs { color: #fdba74; }
+    #sm-pfs button.mini { padding: 2px 7px; font-size: 10.5px; }
+    #sm-cam { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 4px; padding: 5px; }
+    #sm-cam button { width: 36px; height: 32px; font-size: 15px; padding: 0; }
+    #sm.sm-3d #sm-pfs, #sm.sm-3d #sm-cam, #sm.sm-3d #sm-over { pointer-events: auto; }
+    #sm-over { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 420px; max-width: 92vw; text-align: center; padding: 20px; display: none; z-index: 5; }
+    #sm-over.show { display: block; } #sm-over .title { font-size: 20px; color: #fde047; }
+    #sm-over-body { margin-top: 10px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    #sm-over-body div { background: #111a2b; border-radius: 8px; padding: 8px; } #sm-over-body b { display: block; font-size: 20px; }
+    .tag-menu { margin-top: 5px; padding-top: 5px; border-top: 1px solid #334155; white-space: normal; width: 300px; color: #e2e8f0; }
+    .sm-tag.sel .tag-menu { color: #111; } .sm-tag .tag-menu button { font-size: 10.5px; padding: 3px 6px; }
+    .sm-tag.sel { background: rgba(15,23,42,.95); color: #e2e8f0; border-color: #facc15 !important; } .sm-tag.sel i { color: #fde047; }
+    #sm.min #sm-side { width: auto; bottom: auto; } #sm.min #sm-side-body { display: none; }
+    #sm.sm-3d { background: transparent; pointer-events: none; }
+    #sm.sm-3d #sm-canvas { visibility: hidden; }
+    #sm.sm-3d #sm-top, #sm.sm-3d #sm-side { pointer-events: auto; }
+    @media (max-width: 900px) { #sm-side { width: calc(100vw - 20px); bottom: auto; max-height: 45vh; } }
+    #sec { position: fixed; inset: 0; z-index: 40; display: none; background: #0b1220; }
+    #sec-canvas { flex: 1; height: 100%; display: block; }
+    #sec-panel { width: 330px; margin: 10px; overflow-y: auto; }
+    #sec-stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .sec-card { background: #111a2b; border-radius: 8px; padding: 7px 9px; margin-top: 6px; font-size: 12px; cursor: default; }
+    .sec-card.sel { outline: 2px solid #fde047; } .sec-card.req { outline: 2px solid #f59e0b; }
+    .sec-card small { color: var(--muted); } .sec-card button { font-size: 11px; padding: 4px 7px; }
+    .sec-card button:disabled { opacity: .45; cursor: default; }
+    .sec-help { font-size: 11px; line-height: 1.5; margin-top: 10px; }
+    @media (max-width: 900px) { #sec { flex-direction: column; } #sec-panel { width: auto; max-height: 45vh; } }
     #solved { margin-top: 10px; font-size: 11.5px; color: #cbd5e1; line-height: 1.55; }
     #toast { position: fixed; top: 96px; left: 50%; transform: translateX(-50%); z-index: 30; display: none; padding: 9px 18px;
       border-radius: 10px; font-weight: 700; font-size: 13px; background: rgba(15,23,42,.92); border: 1px solid #475569; }
@@ -90,6 +240,8 @@
     #hint { position: fixed; bottom: 112px; left: 50%; transform: translateX(-50%); font-size: 11px; color: #cbd5e1; z-index: 9;
       background: rgba(5,8,15,.55); padding: 4px 12px; border-radius: 20px; pointer-events: none; white-space: nowrap; }
     #controls .row { margin-top: 0; }
+    .xclose { position: sticky; top: 0; float: right; z-index: 2; padding: 2px 9px; font-size: 13px; }
+    #stops-panel, #tt-panel, #co-panel { overscroll-behavior: contain; }
     #stops-panel { position: fixed; top: 92px; left: 12px; width: 440px; max-height: 70vh; overflow-y: auto; display: none; z-index: 21; }
     .stop-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid rgba(148,163,184,.12); font-size: 12px; }
     .stop-row label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
@@ -101,7 +253,7 @@
     #tt th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 4px; }
     #tt td { padding: 4px; border-bottom: 1px solid rgba(148,163,184,.1); }
     #tt tr.done td { color: #64748b; }
-    .modal { position: fixed; inset: 0; z-index: 35; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+    .modal { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
     .modal canvas { max-width: 92vw; height: auto; border-radius: 8px; }
     #sum-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
     #sum-stats div { display: flex; flex-direction: column; background: #111a29; padding: 8px 10px; border-radius: 8px; }
@@ -135,9 +287,36 @@
     #career-panel .grid b { display: block; font-size: 16px; }
     #career-panel table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
     #career-panel td, #career-panel th { padding: 4px; border-bottom: 1px solid var(--line); text-align: left; }
+    /* breakdowns & incidents */
+    #inc-panel { position: fixed; left: 12px; bottom: 150px; width: 340px; max-width: calc(100vw - 24px); display: none; z-index: 13; border-color: #f59e0b; }
+    #inc-panel .title { color: #fbbf24; }
+    .inc-text { margin-top: 4px; line-height: 1.4; }
+    .inc-steps { list-style: none; margin-top: 6px; }
+    .inc-steps li { display: flex; gap: 6px; padding: 2px 0; color: var(--muted); }
+    .inc-steps li.done { color: #86efac; }
+    .inc-steps li.fail { color: #fca5a5; }
+    .inc-steps li span { width: 14px; display: inline-block; }
+    .inc-status { margin-top: 6px; color: #fde68a; font-size: 12px; }
+    #inc-panel button[disabled] { opacity: .45; cursor: not-allowed; }
+    #ctl-panel { position: fixed; left: 12px; bottom: 150px; width: 380px; max-width: calc(100vw - 24px); display: none; z-index: 15; border-color: #a78bfa; }
+    #ctl-panel .title { color: #c4b5fd; }
+    #ctl-panel .ctl-reasons button { flex: 1 1 45%; text-align: left; }
+    #ctl-panel button[disabled] { opacity: .45; cursor: not-allowed; }
+    #shunt-panel { position: fixed; right: 12px; top: 176px; width: 330px; max-width: calc(100vw - 24px); display: none; z-index: 14; border-color: #38bdf8; }
+    #shunt-panel .title { color: #7dd3fc; }
+    #co-panel { position: fixed; top: 92px; left: 50%; transform: translateX(-50%); width: 560px; max-width: calc(100vw - 24px); max-height: 70vh; overflow: auto; display: none; z-index: 32; border-color: #f5c518; }
+    #co-panel .title { color: #f5c518; letter-spacing: 1px; }
+    #co-panel table.co { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    #co-panel table.co th { text-align: left; color: var(--muted); border-bottom: 1px solid var(--line); padding: 3px 4px; }
+    #co-panel table.co td { padding: 4px; border-bottom: 1px solid rgba(148,163,184,.12); }
+    #co-panel .warn { color: #fca5a5; font-weight: 700; }
+    #sum-tt table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+    #sum-tt th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 3px 4px; }
+    #sum-tt td { padding: 3px 4px; border-bottom: 1px solid rgba(148,163,184,.1); }
+    #sum-tt td.late { color: #fca5a5; } #sum-tt td.early { color: #fbbf24; } #sum-tt td.ok { color: #86efac; }
     @media (max-width: 900px) { #strip { display: none; } #hint { display: none; } #route-modal { width: calc(100vw - 24px); } }
   </style>
-  <script type="module" crossorigin src="/assets/index-CzEtmp9C.js"></script>
+  <script type="module" crossorigin src="/assets/index-CH8d3N6B.js"></script>
 </head>
 <body>
   <div id="auth" role="dialog" aria-modal="true" aria-labelledby="auth-title">
@@ -167,22 +346,31 @@
 
   <div id="top" class="hud">
     <div class="panel" style="max-width: 520px;">
-      <div class="title" id="route-title">Loading route…</div>
+      <div class="title" id="route-title"><button id="btn-menu" class="mobile-only" title="Menu">☰</button><button id="btn-mainmenu" class="mainmenu" title="Main menu">⌂</button><span id="route-title-text">Loading route…</span></div>
       <div class="muted" id="route-meta" style="margin-top:2px;"></div>
-      <div class="row">
-        <button class="primary" id="btn-builder">Route &amp; Roster</button>
-        <button id="btn-reverse" title="Swap source and destination">Reverse route</button>
-        <button id="btn-auto" title="Auto driver (A)">Auto drive</button>
-        <button id="btn-stops" title="Choose halts and dwell times">Stops</button>
-        <button id="btn-timetable" title="Working timetable">Timetable</button>
-        <button id="btn-recorder" title="Speed recorder chart">Recorder</button>
-        <button id="btn-kavach" class="on" title="Kavach automatic train protection">Kavach</button>
-        <button id="btn-busy" class="on" title="Congested stations hold the home signal">Busy stns</button>
-        <button id="btn-lights" title="Headlight: Auto (dark / fog / rain), On or Off — key L">Lights: Auto</button>
-        <button id="btn-wipers" title="Windscreen wipers: Auto (rain), On or Off — key I">Wipers: Auto</button>
- <button id="btn-career" title="Career: rank, XP and run history">Career</button>
-        <button id="user-chip" title="Account">Guest · Log in</button>
-        <button id="btn-derail" title="Realistic derailment on gross overspeed over points and curves (off = penalty + heavy lurch only)">Derail: off</button>
+      <div class="tb-group"><span class="tb-h">Journey</span>
+        <button class="primary" id="btn-builder" data-i="🗺">Route &amp; Roster</button>
+        <button id="btn-reverse" data-i="⇄" title="Swap source and destination">Reverse</button>
+        <button id="btn-auto" data-i="🤖" title="Auto driver (A)">Auto drive</button>
+        <button id="btn-stops" data-i="⏱" title="Choose halts and dwell times">Stops</button>
+        <button id="btn-timetable" data-i="🗓" title="Working timetable">Timetable</button>
+        <button id="btn-recorder" data-i="📈" title="Speed recorder chart">Recorder</button>
+        <button id="btn-caution" data-i="⚠" title="Caution orders (T.409) in force">Caution</button>
+        <button id="btn-photo" data-i="📷" title="Photo mode: hide the HUD, free camera, time of day, save a picture">Photo</button>
+      </div>
+      <div class="tb-group"><span class="tb-h">Safety &amp; cab</span>
+        <button id="btn-kavach" class="on tog" data-i="🛡" title="Kavach automatic train protection">Kavach</button>
+        <button id="btn-busy" class="on tog" data-i="🚦" title="Congested stations hold the home signal">Busy stns</button>
+        <button id="btn-incidents" class="on tog" data-i="⚡" title="Random breakdowns and incidents, each with its real procedure">Incidents</button>
+        <button id="btn-derail" class="tog" data-i="💥" title="Realistic derailment on gross overspeed over points and curves (off = penalty + heavy lurch only)">Derail: off</button>
+        <button id="btn-lights" class="tog" data-i="💡" title="Headlight: Auto (dark / fog / rain), On or Off — key L">Lights: Auto</button>
+        <button id="btn-wipers" class="tog" data-i="🌧" title="Windscreen wipers: Auto (rain), On or Off — key I">Wipers: Auto</button>
+      </div>
+      <div class="tb-group"><span class="tb-h">Profile</span>
+        <button id="btn-home" data-i="⌂" title="Back to the main menu (choose a mode)">Main menu</button>
+        <button id="btn-career" data-i="🎖" title="Career: rank, XP and run history">Career</button>
+        <button id="btn-stats" data-i="🏆" title="Statistics and top-10 leaderboards">Stats</button>
+        <button id="user-chip" data-i="👤" title="Account">Guest · Log in</button>
         <span class="badge" id="backend-badge">…</span>
       </div>
     </div>
@@ -202,9 +390,10 @@
       <div class="row">
         <select id="sel-weather" title="Weather">
           <option value="CLEAR">Clear sun</option>
-          <option value="HAZE">Summer haze</option>
-          <option value="MONSOON">Monsoon rain</option>
-          <option value="FOG">Winter fog</option>
+          <option value="HAZE">Summer heat (TSRs 12–17 h)</option>
+          <option value="MONSOON">Monsoon rain (washouts)</option>
+          <option value="FOG">Winter fog (75 km/h, FSD)</option>
+          <option value="DYNAMIC">Dynamic (changes as you go)</option>
         </select>
         <select id="sel-time" title="Jump to time">
           <option value="">Time…</option>
@@ -227,7 +416,7 @@
       <div class="row">
         <select id="sel-rate" title="Simulation speed">
           <option value="1">Sim 1×</option>
-          <option value="2">Sim 2×</option>
+          <option value="2" selected>Sim 2×</option>
           <option value="5">Sim 5×</option>
           <option value="10">Sim 10×</option>
         </select>
@@ -235,9 +424,10 @@
           <option value="1">Exact 1:1</option>
           <option value="10">Compact 1:10</option>
         </select>
-        <button id="btn-sound" class="on">Sound</button>
-        <button id="btn-announce" class="on" title="Station announcements">Announce</button>
-        <button id="btn-voice" title="Announcer voice: Google Cloud natural en-IN voice (via the backend) or the browser's built-in voice">Voice: Browser</button>
+        <button id="btn-sound" class="on tog" data-i="🔊">Sound</button>
+        <button id="btn-announce" class="on tog" data-i="📢" title="Station announcements">Announce</button>
+        <button id="btn-local" class="on tog" data-i="🗣" title="Repeat announcements in the local language (Telugu, Kannada, Tamil, Hindi…)">Local lang</button>
+        <button id="btn-voice" title="Announcer voice: natural cloud voice (when online) or the browser's built-in voice">Voice: Browser</button>
       </div>
     </div>
   </div>
@@ -249,54 +439,161 @@
     <div id="pf-lock"></div>
   </div>
 
+  <div id="home">
+    <div class="home-in">
+      <div class="row" id="home-user" style="margin-top:0;justify-content:space-between;"><b id="home-hi"></b><span><button id="home-signout">Sign out</button></span></div>
+      <div class="home-title">Indian Rail Sim</div>
+      <div class="home-sub" id="home-who"></div>
+      <div class="row" id="home-guest"><span class="muted">Guest name</span><input id="guest-name" maxlength="30" placeholder="Your name for the leaderboards"><button id="home-login">Log in</button></div>
+      <div class="tiles">
+        <div class="tile" id="tile-drive"><span class="ti">🚆</span><b>Train Simulation</b><small>Drive any route in 3D: signals, timetable, weather, incidents</small></div>
+        <div class="tile" id="tile-station"><span class="ti">🏛️</span><b>Station Master</b><small>Run a big station: Guntakal, Secunderabad, Vijayawada, Bengaluru, Chennai, Kazipet, Mumbai CSMT</small>
+          <span class="tile-opts"><select id="home-sm-station"><option value="GTL">Guntakal Jn</option><option value="SC">Secunderabad</option><option value="BZA">Vijayawada Jn</option><option value="SBC">KSR Bengaluru</option><option value="MAS">Chennai Central</option><option value="ATP">Anantapur</option><option value="KZJ">Kazipet Jn</option><option value="CSMT">Mumbai CSMT (locals)</option></select>
+          <select id="home-sm-mode"><option value="rush15">Rush 15 min</option><option value="rush20">Rush 20 min</option><option value="move100">Move 100 trains</option><option value="endless">Endless</option></select>
+          <button class="primary" id="go-station">Start</button></span></div>
+        <div class="tile" id="tile-ctl"><span class="ti">📈</span><b>Section Controller</b><small>Plan crossings on the Guntakal – Dhone single line on a live time–distance chart</small></div>
+
+        <div class="tile" id="tile-mp"><span class="ti">🏁</span><b>Multiplayer race</b><small>Create a room with a 4-digit code (you choose the route) or join a friend's room — everyone drives the same route, live standings</small>
+          <span class="tile-opts"><input id="mp-code" maxlength="4" inputmode="numeric" placeholder="4-digit code" style="width:110px;">
+          <select id="mp-route"><option value="custom">My own route… (choose in Route &amp; Roster)</option><option value="gtl-sc">Guntakal → Secunderabad</option><option value="gtl-krnt">Guntakal → Kurnool</option><option value="sbc-gtl">Bengaluru → Guntakal</option><option value="mas-bza">Chennai → Vijayawada</option><option value="wadi-csmt">Wadi → Mumbai CSMT</option><option value="hyb-ubl">Hyderabad → Hubballi</option></select>
+          <button class="primary" id="mp-create">Create room</button><button id="mp-join">Join</button></span></div>
+        <div class="tile" id="tile-daily"><span class="ti">📅</span><b>Daily challenge</b><small id="daily-desc">Same route, train, weather and time for everyone today — one shot at the daily top 10</small></div>
+        <div class="tile small" id="tile-peak"><span class="ti">🚉</span><b>Mumbai peak-hour challenge</b><small>Station Master at CSMT in the evening rush: locals every few seconds</small></div>
+        <div class="tile small" id="tile-stats"><span class="ti">🏆</span><b>Statistics &amp; Top 10</b><small>Daily · weekly · monthly leaderboards</small></div>
+        <div class="tile small" id="tile-career"><span class="ti">🎖️</span><b>Career</b><small>Rank, XP and run history</small></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="mp-panel" class="panel">
+    <div class="row" style="margin-top:0;justify-content:space-between;"><b id="mp-title">Room</b><span><button id="mp-start" class="primary" style="display:none;">▶ Start race</button> <button id="mp-leave" class="danger">Leave</button></span></div>
+    <div class="muted" id="mp-sub" style="font-size:11px;margin-top:3px;"></div>
+    <table id="mp-table"></table>
+  </div>
+  <div id="photo-bar" class="panel">
+    <b>📷 Photo mode</b><span class="muted" style="font-size:11px;">drag to orbit · wheel to zoom</span>
+    <label class="muted" style="font-size:11px;">Time <input type="range" id="photo-time" min="300" max="1380" step="5"></label>
+    <button id="photo-save" class="primary">Save picture</button><button id="photo-exit">Exit</button>
+  </div>
+
+  <div id="stats-modal" class="modal">
+    <div class="panel" style="width:620px;max-width:94vw;max-height:86vh;overflow:auto;">
+      <div class="row" style="justify-content:space-between;margin-top:0;"><div class="title">Statistics</div><button id="stats-close">Close</button></div>
+      <div class="row seg" id="stats-period"><button data-p="daily" class="on">Daily</button><button data-p="weekly">Weekly</button><button data-p="monthly">Monthly</button></div>
+      <div class="row seg" id="stats-mode"><button data-m="drive" class="on">Train driving</button><button data-m="station">Station Master</button><button data-m="controller">Section Controller</button><button data-m="daily">Daily</button></div>
+      <div class="muted" id="stats-src" style="font-size:11px;margin-top:6px;"></div>
+      <table class="stats-table"><thead><tr><th>#</th><th>Player</th><th>Where</th><th>Score</th><th>Trains</th><th>When</th></tr></thead><tbody id="stats-rows"></tbody></table>
+      <div class="title" style="font-size:13px;margin-top:14px;">Your profile</div>
+      <div id="stats-mine" class="stats-mine"></div>
+    </div>
+  </div>
+
+  <div id="sm">
+    <canvas id="sm-canvas"></canvas>
+    <div id="sm-labels"></div>
+    <div id="sm-pfs" class="panel"></div>
+    <div id="sm-cam" class="panel" title="Camera (also: ← → pan · Q / E rotate · + / − zoom)">
+      <button data-cam="left">◀</button><button data-cam="rotl">⟲</button><button data-cam="in">＋</button><button data-cam="out">－</button><button data-cam="rotr">⟳</button><button data-cam="right">▶</button>
+    </div>
+    <div id="sm-over" class="panel">
+      <div class="title" id="sm-over-title">Shift over</div>
+      <div id="sm-over-body"></div>
+      <div class="row" style="justify-content:center;margin-top:14px;"><button class="primary" id="sm-again">↻ Play again</button><button id="sm-menu">⌂ Main menu</button></div>
+    </div>
+    <div id="sm-top" class="panel">
+      <button id="sm-exit" class="danger" title="Back to the main menu">⌂ Main menu</button>
+      <b id="sm-title">Station Master</b>
+      <div class="seg" id="sm-views"><button data-view="drone" class="on" title="Drone: orbit, pan, zoom">🚁 Drone</button><button data-view="tower" title="Signal cabin">🗼 Tower</button><button data-view="end0" id="sm-v-end0" title="Points and approach at this end">◀ West</button><button data-view="end1" id="sm-v-end1" title="Points and approach at this end">East ▶</button><button data-view="follow" title="Follow the selected / moving train">🎥 Follow</button><button data-view="platform" title="On PF 1">🧍 PF</button><button data-view="panel" title="Signal panel">▦ Panel</button></div>
+      <div class="seg" id="sm-gfx"><button id="sm-roofs" class="on" title="Show / hide platform roofs (canopies) to see the trains under them">🏠</button><button id="sm-fx" title="Glow effects (bloom): prettier, slower">✨</button><button id="sm-cap" title="Cap at a steady 60 fps (smoother on high-refresh screens if frames vary)">60</button></div>
+      <select id="sm-time" title="Time of day"><option value="360">Dawn</option><option value="600" selected>Day</option><option value="1080">Golden hour</option><option value="1150">Dusk</option><option value="1320">Night</option></select>
+      <select id="sm-weather" title="Weather"><option value="CLEAR">Clear</option><option value="HAZE">Summer haze</option><option value="MONSOON">Monsoon rain</option><option value="FOG">Winter fog</option><option value="DYNAMIC">Dynamic</option></select>
+      <div class="seg" id="sm-speed" title="Simulation speed"><button data-x="1">×1</button><button data-x="2" class="on">×2</button><button data-x="5">×5</button></div>
+      <div id="sm-info"></div><span class="muted" id="sm-fps" style="font-size:11px;"></span>
+    </div>
+    <div id="sm-side" class="panel">
+      <div class="row" style="margin-top:0;justify-content:space-between;"><b>Dashboard</b><button id="sm-min" title="Minimise / expand the dashboard">«</button></div>
+      <div id="sm-side-body">
+        <div class="row"><select id="sm-station" style="flex:1;">
+          <option value="GTL">Guntakal Jn</option><option value="SC">Secunderabad Jn</option><option value="BZA">Vijayawada Jn</option>
+          <option value="SBC">KSR Bengaluru (MEMU)</option><option value="MAS">Chennai Central (suburban)</option><option value="ATP">Anantapur</option>
+          <option value="KZJ">Kazipet Jn</option><option value="CSMT">Mumbai CSMT (locals)</option></select>
+          <select id="sm-mode"><option value="rush15">Rush 15</option><option value="rush20">Rush 20</option><option value="move100">Move 100</option><option value="endless">Endless</option></select>
+          <button id="sm-start" title="Start a new shift">↻</button></div>
+        <div class="row"><span class="muted" style="font-size:11px;">Traffic flow</span><select id="sm-flow" style="flex:1;">
+          <option value="0.5">Quiet</option><option value="0.75">Light</option><option value="1" selected>Normal (station default)</option><option value="1.5">Busy</option><option value="2">Peak hour</option></select></div>
+        <div class="muted" id="sm-flow-info" style="font-size:10.5px;margin-top:3px;"></div>
+        <div id="sm-dash"></div>
+        <div id="sm-log" class="sm-log"></div>
+        <div class="muted sm-help">Tap a train waiting at a red home signal (in 3D, on its label or body), then tap a platform line (or a PF button). When it shows READY, tap it to clear the starter. Crossing routes through the same throat can't be set together. Waiting costs points — three times as much for Rajdhani, Shatabdi and Vande Bharat.</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sec">
+    <canvas id="sec-canvas"></canvas>
+    <div id="sec-panel" class="panel">
+      <div class="row" style="margin-top:0;"><select id="sec-shift" style="flex:1;"><option value="15">15 min shift</option><option value="20">20 min shift</option><option value="40">40 min shift</option></select>
+        <button id="sec-restart">↻ Restart</button><button id="sec-exit" class="danger">⌂ Main menu</button></div>
+      <div id="sec-body"></div>
+    </div>
+  </div>
+
   <div id="route-modal" class="panel">
-    <div class="title">Source → Destination Route &amp; Roster Builder</div>
-    <div class="row">
-      <button class="preset" data-preset="gtl-sc">GTL → SC Express via Dhone, Kurnool, Kacheguda</button>
-      <button class="preset" data-preset="gtl-krnt">GTL → KRNT Express (Dhone diversion)</button>
-      <button class="preset" data-preset="gtl-krnt-pass">77414 GTL → KRNT Passenger</button>
-      <button class="preset" data-preset="krnt-gtl">KRNT → GTL (VV Nagar on left)</button>
-      <button class="preset" data-preset="atp-krnt">ATP → KRNT via GTL (engine reversal)</button>
-      <button class="preset" data-preset="tpty-rc-wadi">TPTY → HYB via Raichur &amp; Wadi</button>
-      <button class="preset" data-preset="tpty-krnt">TPTY → HYB via Kurnool</button>
-      <button class="preset" data-preset="sbc-gtl">SBC → GTL (Deccan)</button>
-      <button class="preset" data-preset="mas-bza">MAS → BZA (Coastal)</button>
-      <button class="preset" data-preset="wadi-csmt">WADI → CSMT (Ghats)</button>
+    <div class="title">Train Simulation · plan a journey</div>
+    <div id="mp-pick" class="sel-st pend" style="display:none;margin-top:8px;"></div>
+    <div class="sec">Build your own</div>
+    <div class="row"><span class="muted lbl">Type</span><select id="sel-kind" style="flex:1;"><option value="main" selected>Main line</option><option value="sub">Suburban (Mumbai locals / Hyderabad MMTS)</option></select></div>
+    <div id="sub-box" style="display:none;">
+      <div class="row"><span class="muted lbl">City</span><select id="sel-city" style="flex:1;"><option value="MUM">Mumbai</option><option value="HYD">Hyderabad (MMTS)</option></select></div>
+      <div class="row"><span class="muted lbl">Route</span><select id="sel-subroute" style="flex:1;"></select></div>
+      <div class="row"><span class="muted lbl">Direction</span><select id="sel-subdir" style="flex:1;"><option value="0">As listed</option><option value="1">Reverse</option></select></div>
+      <div class="row"><button class="primary" id="btn-sub-go" style="flex:1;">Start suburban run (all stops)</button></div>
     </div>
-    <div class="row"><span class="muted">Saved roster</span><select id="sel-roster" style="flex:1;"><option value="">— Load from PostgreSQL —</option></select></div>
-    <div class="row"><span class="muted">From</span><select id="sel-src"></select><span class="muted">To</span><select id="sel-dst"></select></div>
-    <div class="row"><span class="muted">Via</span>
-      <select id="sel-via">
-        <option value="">Auto shortest</option>
-        <option value="GTL,RC,WADI">GTL, RC, WADI (Rayalaseema)</option>
-        <option value="GTL,KRNT">GTL, KRNT (Kurnool line)</option>
-        <option value="DHNE">DHNE (Dhone diversion)</option>
+    <div class="row"><span class="muted lbl">From</span><select id="sel-src" style="flex:1;"></select></div>
+    <div class="row"><span class="muted lbl">To</span><select id="sel-dst" style="flex:1;"></select></div>
+    <div class="row"><span class="muted lbl">Route via</span>
+      <select id="sel-via" style="flex:1;">
+        <option value="">Fastest route</option>
+        <option value="@ATP_TO_GTL_DIRECT">Guntakal – Anantapur direct line (not via Gooty)</option>
+        <option value="GTL,RC,WADI">Guntakal, Raichur, Wadi</option>
+        <option value="GTL,KRNT">Guntakal, Kurnool</option>
+        <option value="DHNE">Dhone</option>
       </select>
     </div>
-    <div class="row"><span class="muted">Train</span>
-      <select id="sel-rake">
-        <option value="VANDE_BHARAT">Vande Bharat EMU (160 km/h)</option>
-        <option value="LHB" selected>WAP-7 + LHB Express (130 km/h)</option>
-        <option value="ICF">WDP-4D + ICF Express (110 km/h)</option>
-        <option value="RAJDHANI">WAP-7 + Rajdhani Express (130 km/h)</option>
-        <option value="DURANTO">WAP-7 + Duranto Express (130 km/h)</option>
-        <option value="DEMU_PASSENGER">DEMU Local Passenger (90 km/h, all stops)</option>
-        <option value="BOXN_GOODS">WAG-12B + BOXN Goods (75 km/h)</option>
+    <div class="row"><span class="muted lbl">Train</span>
+      <select id="sel-rake" style="flex:1;">
+        <option value="VANDE_BHARAT">Vande Bharat (160 km/h)</option>
+        <option value="LHB" selected>Express, LHB coaches (130 km/h)</option>
+        <option value="ICF">Express, ICF coaches, diesel (110 km/h)</option>
+        <option value="RAJDHANI">Rajdhani (130 km/h)</option>
+        <option value="DURANTO">Duranto (130 km/h)</option>
+        <option value="DEMU_PASSENGER">Local passenger DEMU (90 km/h, all stops)</option>
+        <option value="VANDE_BHARAT_ORANGE">Vande Bharat, saffron (160 km/h)</option>
+        <option value="GARIB_RATH">Garib Rath, all AC 3-tier, more stops (130 km/h)</option>
+        <option value="JAN_SHATABDI">Jan Shatabdi, parrot green (110 km/h)</option>
+        <option value="ICF_CREAM">Express, cream ICF coaches (110 km/h)</option>
+        <option value="BOXN_GOODS">Goods train, 58 wagons (75 km/h)</option>
       </select>
     </div>
     <div class="row">
-      <button class="primary" id="btn-solve">Build live route</button>
-      <button id="btn-save">Save to PostgreSQL</button>
+      <button class="primary" id="btn-solve">Start journey</button>
+      <button id="btn-save">Save this train</button>
     </div>
+    <div class="row"><span class="muted lbl">My trains</span><select id="sel-roster" style="flex:1;"><option value="">— Saved trains —</option></select></div>
     <div id="solved"></div>
   </div>
 
   <div id="toast"></div>
+  <div id="inc-panel" class="panel" role="status" aria-live="polite"></div>
+  <div id="co-panel" class="panel" role="dialog" aria-label="Caution order"></div>
+  <div id="shunt-panel" class="panel" role="status" aria-live="polite"></div>
+  <div id="ctl-panel" class="panel" role="dialog" aria-label="Section control"></div>
   <canvas id="dash" width="980" height="190"></canvas>
   <div id="engine-panel" class="panel">
     <div class="title" id="engine-title">Engine change</div>
     <div class="muted" id="engine-sub" style="margin-top:2px;"></div>
-    <div class="row"><select id="engine-select"></select><button class="primary" id="btn-engine">Detach &amp; attach engine</button></div>
+    <div class="row"><select id="engine-select"></select><button id="btn-engine">Shunter changes engine</button></div>
+    <div class="row"><button class="primary" id="btn-runround" title="Drive the relief loco round the train yourself: 15 km/h shunting limit, couple under 5 km/h">Run round yourself (shunting)</button></div>
   </div>
   <div id="tt-panel" class="panel">
     <div class="title">Working timetable</div>
@@ -305,9 +602,10 @@
   </div>
   <div id="rec-panel" class="modal"><div class="panel"><canvas id="rec-chart" width="900" height="300"></canvas><div class="row" style="justify-content:flex-end;"><button id="rec-close">Close</button></div></div></div>
   <div id="summary" class="modal">
-    <div class="panel" style="max-width:960px;">
+    <div class="panel" style="max-width:960px;max-height:92vh;overflow:auto;">
       <div class="title" style="font-size:18px;">Journey summary</div>
       <div id="sum-stats"></div>
+      <div id="sum-tt"></div>
       <canvas id="sum-chart" width="900" height="260" style="margin-top:10px;"></canvas>
       <div id="sum-events" class="muted" style="font-size:11.5px;margin-top:6px;max-height:120px;overflow:auto;"></div>
       <div class="row" style="justify-content:flex-end;"><button id="sum-close">Close</button><button class="primary" id="sum-restart">Drive again</button></div>
@@ -322,6 +620,8 @@
       <div class="muted" id="car-next" style="font-size:12px;"></div>
       <div class="grid" id="car-grid"></div>
       <table><thead><tr><th>Run</th><th>Train</th><th>km</th><th>Result</th><th>XP</th></tr></thead><tbody id="car-hist"></tbody></table>
+      <div class="title" style="font-size:13px;margin-top:14px;">Achievements</div>
+      <div id="ach-list"></div>
       <div class="muted" style="font-size:11px;margin-top:8px;">XP: 2 per km driven; finishing a run +100; on time +100 (within 10 min +40); score ÷ 10; −50 per SPAD; −150 for a collision or derailment.</div>
       <div class="row" style="justify-content:flex-end;"><button id="car-close">Close</button></div>
     </div>
@@ -342,7 +642,7 @@
       </div>
     </div>
   </div>
-  <div id="hint">Mouse: drag orbit · right-drag pan · wheel zoom &nbsp;|&nbsp; Trackpad: 2-finger swipe orbit · pinch zoom · Shift+swipe pan &nbsp;|&nbsp; Keys: ←↑→↓ orbit · Shift+arrows pan · +/− zoom · 1–9 / C cameras (1 front · 8 guard · 9 crew · V swap) · W/S throttle · Space brake · H horn · A auto</div>
+  <div id="hint">Mouse: drag orbit · right-drag pan · wheel zoom &nbsp;|&nbsp; Trackpad: 2-finger swipe orbit · pinch zoom · Shift+swipe pan &nbsp;|&nbsp; Keys: ←↑→↓ orbit · Shift+arrows pan · +/− zoom · 1–9 / C cameras (1 front · 8 guard · 9 crew · V swap) · W/S throttle (S below N0 = dynamic brake on goods) · Space brake · H horn · P panto · A auto</div>
   <div id="campad" class="panel" title="Camera: hold a button">
     <div class="lbl">CAMERA</div>
     <button data-cam="in" title="Zoom in">＋</button><button data-cam="up" title="Tilt up">▲</button><button data-cam="out" title="Zoom out">－</button>
@@ -364,6 +664,8 @@
         <span>Kavach</span><b id="kavach-state">ON</b>
         <span>SPADs</span><b id="spads">0</b>
         <span>Score</span><b id="score">0</b>
+        <span>Gradient</span><b id="grade">Level</b>
+        <span>Panto</span><b id="panto">UP</b>
       </div>
     </div>
     <div class="panel" id="strip">
@@ -380,6 +682,7 @@
         <button id="btn-rel">Release (R)</button>
         <button id="btn-emg" style="background:#7f1d1d;border-color:#ef4444;">EMG (E)</button>
         <button id="horn-btn">HORN (H)</button>
+        <button id="btn-panto" class="on" title="Raise / lower the pantograph (P)">Panto: up</button>
       </div>
     </div>
   </div>

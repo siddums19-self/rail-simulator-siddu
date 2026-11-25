@@ -5,6 +5,10 @@ import { OFFLINE_HUBS, OFFLINE_EDGES } from './offlineGraph.data.js';
 
 export { OFFLINE_HUBS };
 
+// Terminus stations (buffer stops): fallback until the backend has run changeset 008-terminal-hubs.
+export const TERMINALS = new Set(['HWH', 'HYB', 'MAS', 'CSMT', 'DDR', 'VSG']);
+export const isTerminal = (code, hub) => !!(hub?.terminal || TERMINALS.has(code));
+
 // Corrections applied to API results until the backend has run the matching Liquibase changesets.
 export const TRACK_TYPE_OVERRIDES = { GTL_TO_DHNE_FLYOVER: 'SINGLE_LINE_WITH_LOOPS' };
 
@@ -26,13 +30,17 @@ export function solveOffline(source, dest, viaHubs = [], allStopsPassenger = fal
     (graph[e.fromHub] ||= []).push({ n: e.toHub, e, rev: false });
     (graph[e.toHub] ||= []).push({ n: e.fromHub, e, rev: true });
   }
-  const way = [source, ...viaHubs.flatMap((v) => v.split(',')).map((v) => v.trim().toUpperCase()).filter(Boolean), dest];
+  // "@EDGE_ID" entries are not waypoints: they ask for that line where there is a choice
+  // (e.g. "@ATP_TO_GTL_DIRECT" = Guntakal - Anantapur direct line instead of via Gooty)
+  const tokens = viaHubs.flatMap((v) => v.split(',')).map((v) => v.trim().toUpperCase()).filter(Boolean);
+  const prefer = new Set(tokens.filter((v) => v.startsWith('@')).map((v) => v.slice(1)));
+  const way = [source, ...tokens.filter((v) => !v.startsWith('@')), dest];
   const legs = [];
   let total = 0;
   for (let i = 0; i < way.length - 1; i++) {
     const a = way[i], b = way[i + 1];
     if (a === b) continue;
-    const path = dijkstra(graph, a, b);
+    const path = dijkstra(graph, a, b, (code) => isTerminal(code, hubMap[code]), prefer);
     if (!path.length) throw new Error(`No connected railway path between ${a} and ${b}`);
     for (const step of path) {
       const raw = step.e.stationsCsv.split(',');
@@ -45,7 +53,7 @@ export function solveOffline(source, dest, viaHubs = [], allStopsPassenger = fal
           code,
           platforms: hub ? hub.platforms : (skip ? 2 : 3),
           defaultHalt: allStopsPassenger || !skip,
-          mandatoryReversal: !!(hub && hub.mandatoryReversal && code !== source && code !== dest)
+          mandatoryReversal: !!((hub?.mandatoryReversal || isTerminal(code, hub)) && code !== source && code !== dest)
         };
       });
       legs.push({
@@ -69,7 +77,7 @@ export function solveOffline(source, dest, viaHubs = [], allStopsPassenger = fal
   };
 }
 
-function dijkstra(graph, start, end) {
+function dijkstra(graph, start, end, terminal = () => false, prefer = new Set()) {
   const dist = { [start]: 0 }, prev = {}, prevNode = {};
   const open = new Set([start]);
   while (open.size) {
@@ -77,8 +85,9 @@ function dijkstra(graph, start, end) {
     for (const n of open) if (cur === null || dist[n] < dist[cur]) cur = n;
     open.delete(cur);
     if (cur === end) break;
+    if (cur !== start && terminal(cur)) continue; // buffer stops: no way through a terminus
     for (const adj of graph[cur] || []) {
-      const nd = dist[cur] + adj.e.distanceKm;
+      const nd = dist[cur] + adj.e.distanceKm * (prefer.has(adj.e.edgeId) ? 0.5 : 1);
       if (nd < (dist[adj.n] ?? Infinity)) { dist[adj.n] = nd; prev[adj.n] = adj; prevNode[adj.n] = cur; open.add(adj.n); }
     }
   }

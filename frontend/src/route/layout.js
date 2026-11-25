@@ -4,6 +4,8 @@ import { makeStationLayout, anchorLayout, appendStationTransitions, playerMain }
 import { OPEN_SCALE, MIN_OPEN_WORLD } from '../config.js';
 import { makeRng, range, smoothstep } from '../core/rng.js';
 import { stationName } from './stationNames.js';
+import { isTerminal } from './offlineSolver.js';
+import { planRivers, riverCarve } from '../world/water.js';
 
 // Guntakal ROR flyover geometry, expressed in u = metres travelled away from
 // the GTL station boundary toward Dhone. Departing GTL -> DHNE the line runs
@@ -15,12 +17,34 @@ export const GTL_SPECIAL = {
   curve0: 1000, curve1: 2380, radius: 950, ramp: 220,
   rise0: 380, rise1: 1150, fall0: 1450, fall1: 2000,
   peak: 8.5, crossU: 1355, length: 2800,
-  vvNagarU: 2080, vvNagarLat: 24, drmU: 1040 // DRM office just before the foot over bridge (u 1150)
+  vvNagarU: 2080, vvNagarLat: 24, drmU: 1040,
+  // Distances measured from the GTL platform ends on the east side (d). The throat
+  // ladder is compact (all lines down to the running lines within throatMax), the
+  // road-over-rail bridge spans those 3-4 lines at robD, and 150 m beyond it the
+  // Dhone line starts to curve away, with the DRM office and the junction FOB there.
+  throatMax: 200, robD: 300, divergeD: 450, curveLen: 1380, fobD: 440, drmD: 530, vvNagarD: 1530
 };
+
+// Guntakal east junction seen from the Gooty line (lateral offsets departing GTL, + = right): Dhone line
+// -8.65, Gooty Down -2.65 (our line), Gooty Up +2.65, goods line +7.95, and the crossover ladder joining them.
+export const GTL_DHONE_LAT = 8.65;
+export const GTL_GOOTY_LADDER = [[20, 90, 7.95, 2.65], [100, 170, 2.65, -2.65], [180, 250, -8.65, -2.65]];
+
+// Guntakal's west end: the Adoni and Ballari lines leave side by side (facing west, Ballari on the
+// left, Adoni on the right) and part after a few hundred metres. Distances from the throat edge.
+export const GTL_WEST = { lat: 8.65, curveStart: 380, turn: (45 * Math.PI) / 180, radius: 1100, length: 3000, straight: 700 };
+// crossovers joining the other line to our running lines (offsets facing out of the west end)
+export const gtlWestLadder = (side) => [[20, 90, side * 8.65, side * 2.65], [100, 170, side * 2.65, -side * 2.65]];
+
+// Which end of Guntakal a neighbouring station lies on.
+const GTL_EAST_NEIGHBOURS = new Set(['GY', 'MKR', 'KLU']), GTL_WEST_NEIGHBOURS = new Set(['AD', 'BTNL']);
+// wayside stations that have loop lines (crossing / goods loops)
+const LOOP_STATIONS = new Set(['MKR', 'PDL', 'MYL', 'LMD', 'BVO', 'DVD']);
+export const gtlEnd = (code) => (GTL_EAST_NEIGHBOURS.has(code) ? 'E' : GTL_WEST_NEIGHBOURS.has(code) ? 'W' : null);
 
 const BIOME_RELIEF = {
   DECCAN_PLATEAU: 4, EASTERN_GHATS_DECCAN: 7, WESTERN_GHATS_URBAN: 22, WESTERN_GHATS_PLATEAU: 12,
-  CENTRAL_NORTH_PLAINS: 2, EAST_COAST_DELTA: 1.2, EAST_COAST_BENGAL: 1.2, GODAVARI_COAST: 1.2,
+  CENTRAL_NORTH_PLAINS: 2, METRO_SUBURBAN: 1, EAST_COAST_DELTA: 1.2, EAST_COAST_BENGAL: 1.2, GODAVARI_COAST: 1.2,
   NALLAMALA_COASTAL: 10, WEST_COAST_GUJARAT: 1.5, ARAVALLI_RAJASTHAN: 7, RAJASTHAN_NCR: 2.5, URBAN_SUBURBAN: 1
 };
 const GHAT_BIOMES = new Set(['WESTERN_GHATS_URBAN', 'WESTERN_GHATS_PLATEAU', 'NALLAMALA_COASTAL']);
@@ -64,7 +88,9 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
           platforms: st[i].platforms,
           halt: st[i].defaultHalt,
           minor: !st[i].defaultHalt, // a wayside halt (village), not a town station
-          mandatoryReversal: st[i].mandatoryReversal
+          mandatoryReversal: st[i].mandatoryReversal,
+          simple: !!st[i].simple,
+          terminal: isTerminal(st[i].code, hubs?.find((h) => h.code === st[i].code))
         });
       }
       if (i < n - 1) {
@@ -80,7 +106,7 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
   });
 
   const last = stations.length - 1;
-  const METRO = new Set(['NDLS', 'CSMT', 'MAS', 'HWH', 'SBC', 'SC', 'HYB', 'ADI', 'PUNE', 'BBS', 'NZM', 'KYN', 'DR', 'TNA']);
+  const METRO = new Set(['NDLS', 'CSMT', 'MAS', 'HWH', 'SBC', 'SC', 'HYB', 'ADI', 'PUNE', 'BBS', 'NZM', 'KYN', 'DR', 'TNA', 'DDR']);
   stations.forEach((s, i) => {
     s.index = i;
     // scheduled dwell (in-game minutes): metros 10, big junctions like Guntakal 5, others 1
@@ -102,24 +128,34 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
   stations.forEach((s, i) => {
     if (s.isOrigin || s.isDest) return;
     const prev = stations[i - 1], next = stations[i + 1];
-    const inDhne = s.gapIn?.leg.edgeId === 'GTL_TO_DHNE_FLYOVER';
-    const outDhne = s.gapOut?.leg.edgeId === 'GTL_TO_DHNE_FLYOVER';
-    const gtlReversal = s.code === 'GTL' && ((prev.code === 'GY' && outDhne) || (inDhne && next.code === 'GY'));
-    if (s.mandatoryReversal || gtlReversal) {
+    // Guntakal is one junction with two ends: east (Gooty, Dhone) and west (Adoni/Raichur, Ballari).
+    // Arriving and leaving by the same end means changing direction there.
+    const gtlReversal = s.code === 'GTL' && !!gtlEnd(prev.code) && gtlEnd(prev.code) === gtlEnd(next.code);
+    if (s.mandatoryReversal || gtlReversal || s.terminal) { // a terminus in mid-route: the train reverses there
       s.reversal = true;
       s.halt = true;
       s.dwellMin = Math.max(s.dwellMin, 10);
     }
   });
 
-  // Guntakal ROR flyover detection (only when the route really uses GTL<->DHNE).
+  // Guntakal ROR flyover detection (only when the route really uses GTL<->DHNE). After a reversal at
+  // Guntakal the journey continues as a new leg (built afresh), so only the arrival side is special here.
   let gtl = null;
+  const leavesReversal = (i) => stations[i].code === 'GTL' && stations[i].reversal;
   gaps.forEach((g, i) => {
-    if (g.leg.edgeId !== 'GTL_TO_DHNE_FLYOVER') return;
+    if (g.leg.edgeId !== 'GTL_TO_DHNE_FLYOVER' || leavesReversal(i)) return;
     const meta = parseSpecial(g.leg.specialGeometryJson) || {};
     if (!g.leg.reversed && stations[i].code === 'GTL') g.special = { atStart: true, meta };
     if (g.leg.reversed && stations[i + 1].code === 'GTL') g.special = { atStart: false, meta };
     // the GTL-DHNE line type comes from the database (single line with crossing loops)
+  });
+  // Guntakal <-> Gooty: the same east throat seen from the Gooty line. Reserve the same
+  // straight, level stretch so the Dhone line, ROB, FOB, DRM office and VV Nagar appear too.
+  gaps.forEach((g, i) => {
+    if (g.special || leavesReversal(i)) return;
+    const a = stations[i].code, b = stations[i + 1].code;
+    if (a === 'GTL' && b === 'GY') g.special = { atStart: true, meta: {}, gooty: true };
+    if (a === 'GY' && b === 'GTL') g.special = { atStart: false, meta: {}, gooty: true };
   });
 
   stations.forEach((s) => {
@@ -131,8 +167,8 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
       const prevC = stations[s.index - 1]?.code, nextC = stations[s.index + 1]?.code;
       const outDhne = s.gapOut && s.gapOut.leg.edgeId === 'GTL_TO_DHNE_FLYOVER' && !s.gapOut.leg.reversed;
       const inDhne = s.gapIn && s.gapIn.leg.edgeId === 'GTL_TO_DHNE_FLYOVER' && s.gapIn.leg.reversed;
-      const gootyBehind = prevC === 'GY' || inDhne;
-      const gootyAhead = nextC === 'GY' || outDhne;
+      const gootyBehind = prevC === 'GY' || prevC === 'KLU' || inDhne;   // KLU: the Anantapur direct line, same end as Gooty
+      const gootyAhead = nextC === 'GY' || nextC === 'KLU' || outDhne;
       mirror = gootyAhead && !gootyBehind;
     }
     // variety: wayside halts get just the two mains, small stops sometimes one loop,
@@ -140,12 +176,43 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     let variant = null, goodsLoops = 0;
     const h = [...s.code].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 9973, 17) / 9973;
     if (s.platforms <= 2 && !s.isOrigin && !s.isDest) variant = !s.halt ? 'two' : h < 0.55 ? 'loop1' : h < 0.8 ? 'two' : null;
+    if (LOOP_STATIONS.has(s.code)) { variant = null; s.platforms = Math.max(3, s.platforms); } // crossing / goods loops
     if (s.category === 'metro') goodsLoops = 3; else if (s.category === 'junction') goodsLoops = 2; else if (s.platforms >= 3) goodsLoops = h < 0.5 ? 1 : 0;
+    if (LOOP_STATIONS.has(s.code)) goodsLoops = Math.max(goodsLoops, 1);
+    if (s.simple) { variant = 'two'; goodsLoops = 0; }                      // suburban halt: the two running lines only
     // Guntakal: the Gooty-side tracks continue straight into Gooty Down / Up and the goods line
     const GOOTY = { targets: [6.0, 11.3, 16.6] };
-    const exitBranches = s.code === 'GTL' && s.gapOut?.special?.atStart ? { ...GOOTY, sign: 1 } : null;
-    const entryBranches = s.code === 'GTL' && s.gapIn?.special && !s.gapIn.special.atStart ? { ...GOOTY, sign: -1 } : null;
-    s.layout = makeStationLayout({ platforms: s.platforms, entryLine, exitLine, mirror, variant, goodsLoops, entryBranches, exitBranches });
+    const exitBranches = s.code === 'GTL' && s.gapOut?.special?.atStart && !s.gapOut.special.gooty ? { ...GOOTY, sign: 1 } : null;
+    const entryBranches = s.code === 'GTL' && s.gapIn?.special && !s.gapIn.special.atStart && !s.gapIn.special.gooty ? { ...GOOTY, sign: -1 } : null;
+    // Guntakal's east throat (toward Dhone / Gooty) is compact so the ROB sees only the running lines
+    const compactExit = s.code === 'GTL' && s.gapOut?.special?.atStart ? GTL_SPECIAL.throatMax : null;
+    const compactEntry = s.code === 'GTL' && s.gapIn?.special && !s.gapIn.special.atStart ? GTL_SPECIAL.throatMax : null;
+    // On the Gooty route Guntakal is the same station: built as on the Dhone route (the Dhone line as its
+    // running line, the Gooty lines branching off) and moved sideways so Gooty sits under our path.
+    const gootyOut = !!(compactExit && s.gapOut.special.gooty), gootyIn = !!(compactEntry && s.gapIn.special.gooty);
+    let eL = entryLine, xL = exitLine, frameOffset = 0, entryBase = 0, exitBase = 0, eB = entryBranches, xB = exitBranches;
+    if (gootyOut) {
+      frameOffset = -GTL_DHONE_LAT; xL = 'S'; exitBase = -GTL_DHONE_LAT; xB = { ...GOOTY, sign: 1, base: -GTL_DHONE_LAT };
+      if (s.isOrigin) { eL = 'S'; entryBase = -GTL_DHONE_LAT; }
+    }
+    if (gootyIn) {
+      frameOffset = GTL_DHONE_LAT; eL = 'S'; entryBase = GTL_DHONE_LAT; eB = { ...GOOTY, sign: -1, base: GTL_DHONE_LAT };
+      if (s.isDest) { xL = 'S'; exitBase = GTL_DHONE_LAT; }
+    }
+    // Guntakal west end: the line our route doesn't use branches off the yard on its own side
+    const westOut = s.code === 'GTL' && !s.reversal && gtlEnd(stations[s.index + 1]?.code) === 'W';
+    const westIn = s.code === 'GTL' && gtlEnd(stations[s.index - 1]?.code) === 'W';
+    const westRoute = westOut ? stations[s.index + 1].code : westIn ? stations[s.index - 1].code : null;
+    const westSide = westRoute === 'AD' ? -1 : 1; // facing west: Ballari left, Adoni right
+    if (westOut) { xB = { targets: [GTL_WEST.lat], sign: westSide, base: 0 }; s.gtlWestSide = { out: true, route: westRoute === 'AD' ? 'AD' : 'BAY', side: westSide }; }
+    if (westIn) { eB = { targets: [GTL_WEST.lat], sign: -westSide, base: 0 }; s.gtlWestSide = { out: false, route: westRoute === 'AD' ? 'AD' : 'BAY', side: westSide }; }
+    s.layout = makeStationLayout({ platforms: s.platforms, entryLine: eL, exitLine: xL, mirror, variant, goodsLoops, entryBranches: eB, exitBranches: xB,
+      compactEntry: compactEntry ?? (westIn ? GTL_SPECIAL.throatMax : null), compactExit: compactExit ?? (westOut ? GTL_SPECIAL.throatMax : null),
+      frameOffset, entryBase, exitBase, noXoEntry: westIn, noXoExit: westOut });
+    if (westOut) { s.layout.noXoExit = true; s.layout.gtlLadderExit = gtlWestLadder(westSide); }
+    if (westIn) { s.layout.noXoEntry = true; s.layout.gtlLadderEntry = gtlWestLadder(westSide).map(([a0, a1, p, q]) => [a0, a1, -p, -q]); }
+    if (gootyOut) { s.layout.exitLine = 'D'; s.layout.noXoExit = true; s.layout.gtlLadderExit = GTL_GOOTY_LADDER; if (s.isOrigin) { s.layout.entryLine = 'D'; s.layout.noXoEntry = true; } }
+    if (gootyIn) { s.layout.entryLine = 'D'; s.layout.noXoEntry = true; s.layout.gtlLadderEntry = GTL_GOOTY_LADDER.map(([a0, a1, p, q]) => [a0, a1, -p, -q]); if (s.isDest) { s.layout.exitLine = 'D'; s.layout.noXoExit = true; } }
     s.layout.mirror = mirror;
   });
 
@@ -227,7 +294,10 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     const meta = g.special.meta || {};
     const peak = 0; // the Dhone line leaves Guntakal at grade (no flyover, nothing passes under it)
     gtl = {
-      gap: g, boundary, dir, peak,
+      gap: g, boundary, dir, peak, gooty: !!g.special.gooty, // gooty: we run on the Gooty line, Dhone is the branch
+      // throat: distance from the GTL platform end to the boundary; uOfD converts a distance from the platform end to u
+      throat: atStart ? stations[g.index].layout.zoneEnd - stations[g.index].layout.pEnd : stations[g.index + 1].layout.pStart - stations[g.index + 1].layout.zoneStart,
+      uOfD(d) { return d - this.throat; },
       uToS: (u) => boundary + dir * u,
       sToU: (sv) => dir * (sv - boundary),
       s0: Math.min(boundary, boundary + dir * GTL_SPECIAL.length),
@@ -236,10 +306,20 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     };
   });
 
+  // ---- Guntakal west end frame (the other west line is drawn beside our route).
+  let gtlWest = null;
+  for (const st of stations) {
+    if (!st.gtlWestSide) continue;
+    const w = st.gtlWestSide, L = st.layout;
+    gtlWest = { boundary: w.out ? L.zoneEnd : L.zoneStart, dir: w.out ? 1 : -1, route: w.route, otherSide: w.side, station: st };
+    const g = w.out ? st.gapOut : st.gapIn;
+    if (g) { if (w.out) g.straightStart = GTL_WEST.straight; else g.straightEnd = GTL_WEST.straight; }
+  }
+
   // ---- Curvature plan.
   const curves = [];
   gaps.forEach((g, i) => {
-    let a = g.s0 + 150, b = g.s1 - 150;
+    let a = g.s0 + 150 + (g.straightStart || 0), b = g.s1 - 150 - (g.straightEnd || 0);
     if (g.special) {
       if (g.special.atStart) a = g.s0 + g.specialLen + 250; else b = g.s1 - g.specialLen - 250;
     }
@@ -265,9 +345,9 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
       pos += Lc;
     }
   });
-  if (gtl) {
+  if (gtl && !gtl.gooty) {
     const S = GTL_SPECIAL;
-    const sa = gtl.uToS(S.curve0), sb = gtl.uToS(S.curve1);
+    const sa = gtl.uToS(gtl.uOfD(S.divergeD)), sb = gtl.uToS(gtl.uOfD(S.divergeD + S.curveLen));
     curves.push({ s0: Math.min(sa, sb), s1: Math.max(sa, sb), k: gtl.dir * (-1 / S.radius), ramp: S.ramp });
   }
   curves.sort((p, q) => p.s0 - q.s0);
@@ -330,7 +410,9 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     return gtl.peak * (smootherstep(S.rise0, S.rise1, u) - smootherstep(S.fall0, S.fall1, u));
   };
 
-  const path = new RoutePath(total, curvatureAt, (sv) => undulation(sv) + flyover(sv), undulation);
+  // rivers: the bed lowers the natural ground under the line, so the formation puts the track on a bridge
+  const rivers = planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm });
+  const path = new RoutePath(total, curvatureAt, (sv) => undulation(sv) + flyover(sv), (sv) => undulation(sv) - riverCarve(rivers, sv));
 
   // ---- Biome lookup with smooth blends at junction stations.
   const biomeTransitions = [];
@@ -390,8 +472,13 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     return lane;
   };
 
+  // Terminus at either end: the track stops at buffer stops just beyond the platforms.
+  const o = stations[0], d = stations[last];
+  const trackMin = o.terminal ? o.layout.pStart - 25 : 0;
+  const trackMax = d.terminal ? d.layout.pEnd + 25 : total;
+
   return {
-    stations, gaps, path, total, gtl, curves, curveAt,
+    stations, gaps, path, total, trackMin, trackMax, gtl, gtlWest, rivers, curves, curveAt,
     realKmAt, sAtRealKm, biomeAt, stationAt, lineAt, gapAt, flatHalfWidth, buildLane,
     playerMainAt: (sv) => playerMain(lineAt(sv)),
     totalRealKm: plan.route.totalRealKm

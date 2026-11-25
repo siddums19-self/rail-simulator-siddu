@@ -13,3 +13,23 @@ databaseChangeLog:
       file: db/changelog/006-double-line-except-gtl-dhne.sql
   - include:
       file: db/changelog/007-users-and-career.sql
+  - include:
+      file: db/changelog/008-terminal-hubs.sql
+  - include:
+      file: db/changelog/009-mumbai-western-line.sql
+  - include:
+      file: db/changelog/010-guntakal-hubballi-goa.sql
+  - include:
+      file: db/changelog/011-bhubaneswar-nizamabad-atp-direct.sql
+  - include:
+      file: db/changelog/012-kazipet-hub-extra-halts.sql
+  - include:
+      file: db/changelog/013-game-scores.sql
+  - include:
+      file: db/changelog/014-station-master-trains.sql
+  - include:
+      file: db/changelog/015-warangal-hub.sql
+  - include:
+      file: db/changelog/016-guntakal-more-trains.sql
+  - include:
+      file: db/changelog/017-nagpur-howrah-delhi-links.sql

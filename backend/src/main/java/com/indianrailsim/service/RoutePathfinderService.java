@@ -67,6 +67,10 @@ public class RoutePathfinderService {
         }
         waypoints.add(dest.trim().toUpperCase());
 
+        // terminus stations can't be run through (only started from, ended at or reversed at via a "via")
+        Set<String> terminals = new HashSet<>();
+        hubMap.values().forEach(h -> { if (h.terminal) terminals.add(h.code); });
+
         List<SolvedLeg> legs = new ArrayList<>();
         double totalKm = 0;
 
@@ -75,7 +79,7 @@ public class RoutePathfinderService {
             String legEnd = waypoints.get(i + 1);
             if (legStart.equals(legEnd)) continue;
 
-            List<Adj> legPath = dijkstra(graph, legStart, legEnd);
+            List<Adj> legPath = dijkstra(graph, legStart, legEnd, terminals);
             if (legPath.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "No connected railway path found between " + legStart + " and " + legEnd);
@@ -91,7 +95,7 @@ public class RoutePathfinderService {
                     String code = skip ? s.substring(0, s.length() - 1) : s;
                     RailHub hub = hubMap.get(code);
                     int pf = (hub != null) ? hub.platforms : (skip ? 2 : 3);
-                    boolean rev = hub != null && hub.mandatoryReversal
+                    boolean rev = hub != null && (hub.mandatoryReversal || hub.terminal)
                             && !code.equalsIgnoreCase(source) && !code.equalsIgnoreCase(dest);
                     boolean halt = allStopsPassenger || !skip;
                     return new StationNode(code, pf, halt, rev);
@@ -109,7 +113,7 @@ public class RoutePathfinderService {
         return new SolvedRoute(totalKm, compressedMinutes, legs);
     }
 
-    private List<Adj> dijkstra(Map<String, List<Adj>> graph, String start, String end) {
+    private List<Adj> dijkstra(Map<String, List<Adj>> graph, String start, String end, Set<String> terminals) {
         Map<String, Double> dist = new HashMap<>();
         Map<String, Adj> prevEdge = new HashMap<>();
         Map<String, String> prevNode = new HashMap<>();
@@ -123,6 +127,7 @@ public class RoutePathfinderService {
         while (!pq.isEmpty()) {
             String curr = pq.poll();
             if (curr.equals(end)) break;
+            if (!curr.equals(start) && terminals.contains(curr)) continue; // buffer stops: no way through
             for (Adj adj : graph.getOrDefault(curr, List.of())) {
                 double nd = dist.get(curr) + adj.edge().distanceKm;
                 if (nd < dist.getOrDefault(adj.neighbor(), Double.MAX_VALUE)) {

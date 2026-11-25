@@ -1,3 +1,4 @@
+import { RoadTraffic } from './vehicles.js';
 import * as THREE from 'three/webgpu';
 import { M, registerNightEmissive } from '../core/materials.js';
 import { Batcher, unitBox } from '../core/batcher.js';
@@ -448,7 +449,15 @@ export class PropBuilder {
     const wy = path.yAt(wlS);
     bat.box(M.steelDark(), _v.x, wy + 1.1, _v.z, 0.08, 2.2, 0.08, -path.headingAt(wlS), false);
     bat.box(M.textBoard('W/L', { bg: '#f5c518', fg: '#111', w: 128, h: 128, font: 'bold 60px Arial' }), _v.x, wy + 2.5, _v.z, 0.8, 0.8, 0.05, -path.headingAt(wlS), false);
-    this.ctx.lcs.push({ s, wlS, pivots, group, closed: 0 });
+    const lcObj = { s, wlS, pivots, group, closed: 0 };
+    this.ctx.lcs.push(lcObj);
+    // road traffic: queues at the gate while it is closed (gate posts at +-9 m from the track)
+    const mid = frames.length >> 1, step = 8;
+    const tr = new RoadTraffic(group, frames.map((f) => ({ x: f.x, y: f.y, z: f.z })), {
+      count: 6, rand, laneOff: 1.8,
+      stops: [{ d: mid * step - 11, closed: () => lcObj.closed > 0.05 }, { d: mid * step + 11, closed: () => lcObj.closed > 0.05 }]
+    });
+    (this.ctx.traffic ||= []).push(tr);
     path.pointAt(s - 12, -14, _v);
     const gy = terrain.heightSL(s - 12, -14, _v.x, _v.z);
     bat.box(M.plaster(0xe8dcc0), _v.x, gy + 1.4, _v.z, 3, 2.8, 3, -th);
@@ -461,14 +470,6 @@ export class PropBuilder {
         bat.box(M.textBoard('STOP\nLOOK  LISTEN', { bg: '#ffffff', fg: '#c0392b', w: 256, h: 160, font: 'bold 40px Arial' }), _v.x, wy + 2.4, _v.z, 1.2, 0.8, 0.05, -th + Math.PI / 2, false);
         bat.box(M.steelDark(), _v.x, wy + 1.1, _v.z, 0.08, 2.2, 0.08, 0, false);
       }
-    }
-    // a waiting truck and auto-rickshaw
-    const colors = [0xf39c12, 0x2e86c1, 0x27ae60, 0xc0392b];
-    for (const [lat, w, h, d] of [[16, 2.5, 3.0, 7], [24, 1.4, 1.6, 2.6]]) {
-      path.pointAt(s + 2, lat, _v);
-      const gy2 = terrain.heightSL(s + 2, lat, _v.x, _v.z);
-      bat.box(M.plaster(pick(rand, colors)), _v.x, gy2 + h / 2 + 0.4, _v.z, d, h, w, -th);
-      bat.box(M.black(), _v.x, gy2 + 0.4, _v.z, d * 0.9, 0.7, w * 1.02, -th);
     }
   }
 }

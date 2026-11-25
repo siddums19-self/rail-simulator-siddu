@@ -1,4 +1,4 @@
-import { spokenName } from '../route/stationScripts.js';
+import { spokenName, boardNames } from '../route/stationScripts.js';
 import { API_BASE } from '../config.js';
 
 // Station ambience (crowd, vendors) and regular English PA announcements for
@@ -7,6 +7,53 @@ import { API_BASE } from '../config.js';
 const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
 const spell = (no) => String(no).split('').join(' ');
 const sayTime = (m) => { const t = ((Math.round(m) % 1440) + 1440) % 1440; return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+// Local-language versions (Indian Railways PA: local language, Hindi, English). Telugu, Kannada and
+// Tamil stations get their own language; everywhere else Hindi. {no} train number digits, {name}
+// train name, {pf} platform, {stn} station name in the local script.
+const LOCAL = {
+  te: { tts: 'te-IN',
+    expected: 'ప్రయాణికులకు విజ్ఞప్తి. రైలు నంబరు {no}, {name}, ప్లాట్‌ఫారం నంబరు {pf} పైకి కొద్దిసేపట్లో రానుంది.',
+    arrived: 'రైలు నంబరు {no}, {name}, ప్లాట్‌ఫారం నంబరు {pf} పైకి వచ్చి ఉంది.',
+    arriving: 'ప్రయాణికులకు విజ్ఞప్తి. రైలు నంబరు {no}, {name}, ప్లాట్‌ఫారం నంబరు {pf} పైకి వస్తోంది.',
+    departing: 'రైలు నంబరు {no}, {name}, ప్లాట్‌ఫారం నంబరు {pf} నుండి బయలుదేరుతోంది. మీ ప్రయాణం సుఖమయం కావాలని కోరుకుంటున్నాము.',
+    standing: 'రైలు నంబరు {no}, {name}, ప్లాట్‌ఫారం నంబరు {pf} పై నిలిచి ఉంది.',
+    welcome: '{stn} రైల్వే స్టేషన్‌కు స్వాగతం. మీ ప్రయాణం సుఖమయం కావాలని కోరుకుంటున్నాము.' },
+  kn: { tts: 'kn-IN',
+    expected: 'ಪ್ರಯಾಣಿಕರ ಗಮನಕ್ಕೆ. ರೈಲು ಸಂಖ್ಯೆ {no}, {name}, ಪ್ಲಾಟ್‌ಫಾರ್ಮ್ ಸಂಖ್ಯೆ {pf} ಕ್ಕೆ ಸ್ವಲ್ಪ ಸಮಯದಲ್ಲಿ ಬರಲಿದೆ.',
+    arrived: 'ರೈಲು ಸಂಖ್ಯೆ {no}, {name}, ಪ್ಲಾಟ್‌ಫಾರ್ಮ್ ಸಂಖ್ಯೆ {pf} ಕ್ಕೆ ಬಂದಿದೆ.',
+    arriving: 'ಪ್ರಯಾಣಿಕರ ಗಮನಕ್ಕೆ. ರೈಲು ಸಂಖ್ಯೆ {no}, {name}, ಪ್ಲಾಟ್‌ಫಾರ್ಮ್ ಸಂಖ್ಯೆ {pf} ಕ್ಕೆ ಬರುತ್ತಿದೆ.',
+    departing: 'ರೈಲು ಸಂಖ್ಯೆ {no}, {name}, ಪ್ಲಾಟ್‌ಫಾರ್ಮ್ ಸಂಖ್ಯೆ {pf} ರಿಂದ ಹೊರಡುತ್ತಿದೆ. ನಿಮ್ಮ ಪ್ರಯಾಣ ಸುಖಕರವಾಗಿರಲಿ.',
+    standing: 'ರೈಲು ಸಂಖ್ಯೆ {no}, {name}, ಪ್ಲಾಟ್‌ಫಾರ್ಮ್ ಸಂಖ್ಯೆ {pf} ರಲ್ಲಿ ನಿಂತಿದೆ.',
+    welcome: '{stn} ರೈಲು ನಿಲ್ದಾಣಕ್ಕೆ ಸ್ವಾಗತ. ನಿಮ್ಮ ಪ್ರಯಾಣ ಸುಖಕರವಾಗಿರಲಿ.' },
+  ta: { tts: 'ta-IN',
+    expected: 'பயணிகளின் கவனத்திற்கு. வண்டி எண் {no}, {name}, நடைமேடை எண் {pf} க்கு சிறிது நேரத்தில் வந்து சேரும்.',
+    arrived: 'வண்டி எண் {no}, {name}, நடைமேடை எண் {pf} க்கு வந்துள்ளது.',
+    arriving: 'பயணிகளின் கவனத்திற்கு. வண்டி எண் {no}, {name}, நடைமேடை எண் {pf} க்கு வந்து கொண்டிருக்கிறது.',
+    departing: 'வண்டி எண் {no}, {name}, நடைமேடை எண் {pf} இலிருந்து புறப்படுகிறது. உங்கள் பயணம் இனிதாக அமையட்டும்.',
+    standing: 'வண்டி எண் {no}, {name}, நடைமேடை எண் {pf} இல் நிற்கிறது.',
+    welcome: '{stn} ரயில் நிலையத்திற்கு உங்களை வரவேற்கிறோம்.' },
+  hi: { tts: 'hi-IN',
+    expected: 'यात्रीगण कृपया ध्यान दें. गाड़ी संख्या {no}, {name}, प्लेटफ़ॉर्म संख्या {pf} पर थोड़ी ही देर में आ रही है.',
+    arrived: 'गाड़ी संख्या {no}, {name}, प्लेटफ़ॉर्म संख्या {pf} पर आ चुकी है.',
+    arriving: 'यात्रीगण कृपया ध्यान दें. गाड़ी संख्या {no}, {name}, प्लेटफ़ॉर्म संख्या {pf} पर आ रही है.',
+    departing: 'गाड़ी संख्या {no}, {name}, प्लेटफ़ॉर्म संख्या {pf} से रवाना हो रही है. आपकी यात्रा मंगलमय हो.',
+    standing: 'गाड़ी संख्या {no}, {name}, प्लेटफ़ॉर्म संख्या {pf} पर खड़ी है.',
+    welcome: '{stn} रेलवे स्टेशन पर आपका स्वागत है. आपकी यात्रा मंगलमय हो.' }
+};
+// info: { kind, no, name, pf, code, stnName } -> { text, lang } or null
+export function localAnnouncement(info) {
+  if (!info) return null;
+  const b = boardNames(info.code, info.stnName || info.code);
+  const lang = LOCAL[b.lang] ? b.lang : 'hi';
+  const L = LOCAL[lang], tpl = L[info.kind];
+  if (!tpl) return null;
+  if (tpl.includes('{pf}') && !info.pf) return null; // loop lines: English only
+  if (tpl.includes('{no}') && !info.no) return null;
+  const stn = (lang === 'hi' ? b.hi : b.local) || b.hi || spokenName(info.stnName || '');
+  const text = tpl.replace('{no}', spell(info.no || '')).replace('{name}', info.name ? trainTitle(info.name) : '').replace('{pf}', String(info.pf || '')).replace('{stn}', stn);
+  return { text, lang: L.tts };
+}
+
 const trainTitle = (nm) => nm.replace(/\bSF Exp\b/, 'Superfast Express').replace(/\bSF\b/, 'Superfast Express').replace(/\bExp\b/, 'Express').replace(/\bDEMU\b/, 'demu passenger').replace(/\bMEMU\b/, 'memu').replace(/-/g, ' to ');
 
 export class StationAudio {
@@ -18,6 +65,7 @@ export class StationAudio {
     this._announcer = 0;
     this.welcomed = new Set();
     this.voiceMode = 'browser';
+    this.localLang = true; // repeat each announcement in the station's own language
   }
 
   // Natural crowd: a soft murmur bed plus several distant "speakers" whose
@@ -101,7 +149,7 @@ export class StationAudio {
     return { voice, exact: !!voice && gender(voice) };
   }
 
-  _speak(text, { female = true, rate = 0.9, volume = this.paVolume ?? 0.4 } = {}) {
+  _speak(text, { female = true, rate = 0.9, volume = this.paVolume ?? 0.4, onend = null } = {}) {
     if (!('speechSynthesis' in window) || !this.audio.enabled || !this.audio.announcements) return false;
     if (speechSynthesis.speaking || speechSynthesis.pending) return false;
     const u = new SpeechSynthesisUtterance(text);
@@ -109,8 +157,23 @@ export class StationAudio {
     u.voice = voice;
     u.lang = voice?.lang || 'en-IN'; u.rate = rate; u.volume = volume;
     u.pitch = exact ? 1 : female ? 1.1 : 0.92;
+    if (onend) u.onend = onend;
     speechSynthesis.speak(u);
     return true;
+  }
+
+  // Local-language repeat (browser voices). Falls back to Hindi when the device has no voice for
+  // the station's language; skipped if it has neither.
+  _speakLocal(local, female, gen) {
+    if (!local || !this.localLang || gen !== (this.gen || 0)) return;
+    if (!('speechSynthesis' in window) || !this.audio.enabled || !this.audio.announcements) return;
+    const voices = speechSynthesis.getVoices();
+    const want = local.lang.slice(0, 2);
+    let voice = voices.find((v) => v.lang.toLowerCase().startsWith(want) && /natural|neural|online|premium|enhanced/i.test(v.name)) || voices.find((v) => v.lang.toLowerCase().startsWith(want));
+    if (!voice) return;
+    const u = new SpeechSynthesisUtterance(local.text);
+    u.voice = voice; u.lang = voice.lang; u.rate = 0.92; u.volume = this.paVolume ?? 0.4; u.pitch = female ? 1.05 : 0.95;
+    setTimeout(() => { if (gen === (this.gen || 0)) speechSynthesis.speak(u); }, 700);
   }
 
   // Announcements tied to real train movements at this station, phrased the way
@@ -119,12 +182,13 @@ export class StationAudio {
     const m = t.name.match(/^(\d{5})\s+(.*)$/);
     const id = m ? `train number ${spell(m[1])}, ${trainTitle(m[2])}` : (/goods|rake|special/i.test(t.name) ? 'a goods train' : t.name);
     const pf = t.track?.pf ? `platform number ${t.track.pf}` : 'the loop line';
+    const local = m ? { kind: type === 'expected' || type === 'arrived' ? type : 'departing', no: m[1], name: m[2], pf: t.track?.pf, code: t.st?.code, stnName: t.st?.name } : null;
     let text;
     if (type === 'expected') text = `May I have your attention, please. ${cap(id)}, is expected to arrive shortly on ${pf}, at ${sayTime(t.eta)}.`;
     else if (type === 'arrived') text = `${cap(id)}, has arrived on ${pf}. It is scheduled to leave at ${sayTime(t.departAt)}.`;
     else text = `${cap(id)}, is now leaving from ${pf}. We wish all passengers a happy journey.`;
     this.queue = this.queue || [];
-    this.queue.push({ text, st: t.st, at: performance.now() });
+    this.queue.push({ text, local, st: t.st, at: performance.now() });
   }
 
   // New route: drop everything queued or scheduled for the previous journey.
@@ -139,14 +203,17 @@ export class StationAudio {
   }
 
   // Public: chime, then announce (used for our own train's arrival too).
-  say(text, female = true) {
+  // localInfo: { kind, no, name, pf, code, stnName } for the local-language repeat (see localAnnouncement)
+  say(text, female = true, localInfo = null) {
     const gen = this.gen || 0;
-    this.audio.stationChime(null);
+    const local = localInfo?.text ? localInfo : localAnnouncement(localInfo);
+    const after = () => this._speakLocal(local, female, gen);
+    this.audio.stationChime(null, this.paVolume ?? 0.38, !!this.interior); // chime at the announcer's level
     setTimeout(() => {
       if (gen !== (this.gen || 0)) return;
-      if (this.voiceMode === 'cloud' && !(this.cloudDownUntil > performance.now())) { this._cloudSay(text, female, gen); return; }
-      if (!this._speak(text, { female })) setTimeout(() => { if (gen === (this.gen || 0)) this._speak(text, { female }); }, 4000);
-    }, 1700);
+      if (this.voiceMode === 'cloud' && !(this.cloudDownUntil > performance.now())) { this._cloudSay(text, female, gen, after); return; }
+      if (!this._speak(text, { female, onend: after })) setTimeout(() => { if (gen === (this.gen || 0)) this._speak(text, { female, onend: after }); }, 4000);
+    }, 1450); // the chime (~1.3 s), then the voice
   }
 
   // Station PA loudspeakers heard from a distance: telephone-band speaker tone,
@@ -171,7 +238,7 @@ export class StationAudio {
     return this.paIn;
   }
 
-  async _cloudSay(text, female, gen) {
+  async _cloudSay(text, female, gen, after = null) {
     const a = this.audio;
     if (!a.ctx || !a.enabled || !a.announcements) return;
     const key = (female ? 'f|' : 'm|') + text;
@@ -189,7 +256,7 @@ export class StationAudio {
       const src = a.ctx.createBufferSource(); src.buffer = buf;
       src.connect(this._paChain());
       this.paOut.gain.setValueAtTime(this.paLevel ?? 0.3, a.ctx.currentTime);
-      src.onended = () => { this.cloudBusy = false; if (this.cloudSrc === src) this.cloudSrc = null; };
+      src.onended = () => { this.cloudBusy = false; if (this.cloudSrc === src) this.cloudSrc = null; after?.(); };
       this.cloudSrc = src;
       src.start();
     } catch (e) {
@@ -197,7 +264,7 @@ export class StationAudio {
       this.cloudBusy = false;
       this.cloudDownUntil = performance.now() + 120000;
       this.onCloudFail?.(e.message);
-      this._speak(text, { female });
+      this._speak(text, { female, onend: after });
     }
   }
 
@@ -218,12 +285,13 @@ export class StationAudio {
     const here = spokenName(st.name);
     if (!this.welcomed.has(st) || r < 0.15) {
       this.welcomed.add(st);
-      return `Welcome to ${here}${st.category === 'metro' ? ' railway station' : ''}. We wish you a pleasant journey.`;
+      return { text: `Welcome to ${here}${st.category === 'metro' ? ' railway station' : ''}. We wish you a pleasant journey.`, local: { kind: 'welcome', code: st.code, stnName: st.name } };
     }
     if (ownHalted && r < 0.55) {
       const row = timetable?.rows[st.index];
       const dep = row?.dep != null ? ` It is scheduled to leave at ${sayTime(row.dep)}.` : '';
-      return `Train number ${spell(ops.trainNo)}, ${from} to ${to} Express, is standing on ${where(own)}.${dep}`;
+      return { text: `Train number ${spell(ops.trainNo)}, ${ops.trainName || `${from} to ${to} Express`}, is standing on ${where(own)}.${dep}`,
+        local: { kind: 'standing', no: ops.trainNo, name: ops.trainName || `${from} - ${to} Express`, pf: own.pf, code: st.code, stnName: st.name } };
     }
     const others = [];
     for (const [no, occ] of st.occupancy) {
@@ -233,7 +301,7 @@ export class StationAudio {
     if (others.length) {
       const { t, occ } = others[Math.floor(Math.random() * others.length)];
       const m = occ.name.match(/^(\d{5})\s+(.*)$/);
-      return `Train number ${spell(m[1])}, ${trainTitle(m[2])}, is standing on ${where(t)}.`;
+      return { text: `Train number ${spell(m[1])}, ${trainTitle(m[2])}, is standing on ${where(t)}.`, local: { kind: 'standing', no: m[1], name: m[2], pf: t.pf, code: st.code, stnName: st.name } };
     }
     return null;
   }
@@ -251,14 +319,15 @@ export class StationAudio {
     if (target > 0.01 && !this.realCrowd) this._scheduleCrowd();
     // the PA is a background voice: quiet outside, quieter still from inside the train
     this.paVolume = interior ? 0.22 : 0.38;
+    this.interior = interior;
     this.paLevel = interior ? 0.16 : 0.3;
     if (this.paOut) this.paOut.gain.setTargetAtTime(this.cloudSrc ? this.paLevel : this.paOut.gain.value, a.ctx.currentTime, 0.4);
     // station announcements belong to that station: drop them once we are away from it
     if (this.queue) this.queue = this.queue.filter((q) => q.st === st && prox >= 0.3 && performance.now() - q.at < 90000);
     if (this.queue && this.queue.length && !(window.speechSynthesis?.speaking || window.speechSynthesis?.pending) && !this.cloudBusy && !this._queueBusy) {
       this._queueBusy = true;
-      const text = this.queue.shift().text;
-      this.say(text, true);
+      const q = this.queue.shift();
+      this.say(q.text, true, q.local);
       setTimeout(() => { this._queueBusy = false; }, 2500);
       this.nextAnnounce = Math.max(this.nextAnnounce, 20);
     }
@@ -271,9 +340,9 @@ export class StationAudio {
     if (this.lastStation !== st) { this.lastStation = st; this.nextAnnounce = 4 + Math.random() * 4; }
     this.nextAnnounce -= dt;
     if (this.nextAnnounce <= 0 && !this.cloudBusy && (st.halt || st.category !== 'station')) {
-      const text = this._announcement(ctx);
+      const a = this._announcement(ctx);
       const female = (this._announcer++ % 3) !== 2; // mostly the female announcer, sometimes male
-      if (text) this.say(text, female);
+      if (a) this.say(a.text, female, a.local);
       this.nextAnnounce = 30 + Math.random() * 25;
     }
   }

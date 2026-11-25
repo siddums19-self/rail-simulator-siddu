@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { RoadTraffic } from './vehicles.js';
 import { M } from '../core/materials.js';
 import { mulberry32 } from '../core/rng.js';
 
@@ -33,7 +34,7 @@ const STYLES = {
   // Hyderabad Deccan (Nampally): Nizam-era arches and twin minarets
   HYB: { wall: 0xf0d9a2, trim: 0x8a5a2e, accent: 0xffffff, dome: 0xf7efe0, h: 14, kind: 'nizam', name: 'HYDERABAD DECCAN' },
   // Guntakal: cream colonial divisional HQ station with maroon bands and a clock tower
-  GTL: { wall: 0xf4ead2, trim: 0x8c3a26, accent: 0x8c3a26, dome: 0x8c3a26, h: 15, kind: 'colonial', name: 'GUNTAKAL JUNCTION' }
+  GTL: { wall: 0xc9ced6, trim: 0x8a9099, accent: 0x9aa0a8, dome: 0xd7dbe0, h: 12, kind: 'modern', name: 'GUNTAKAL JUNCTION' }
 };
 
 const RANDOM_KINDS = ['colonial', 'nizam', 'clocktower', 'mysore', 'modern', 'kakatiya', 'howrah'];
@@ -89,6 +90,67 @@ export function buildLandmark(style, c) {
   const name = style.name || c.defaultName;
 
   switch (style.kind) {
+    case 'modern': { // Guntakal: blue glass hall under a long thin roof that sweeps up at both ends, raked columns
+      const glass = new THREE.MeshStandardMaterial({ color: 0x1f3f66, metalness: 0.55, roughness: 0.12, emissive: 0x0a1626, emissiveIntensity: 0.4 });
+      const roofM = P(0xd5d8dd), colM = P(0xb4b9c0), louvre = P(0x8f959e);
+      const out = bs;                                  // +out = towards the street
+      const hallLen = Math.min(bLen * 0.62, 90), overhang = 9;
+      const rLat = front + out * (overhang / 2 - 1);   // roof centre (overhangs the forecourt)
+      const rW = bDepth + overhang + 2, rY = pfTop + bH + 1.4;
+      // glass curtain wall with mullions and transoms
+      box(glass, 0, front + out * 0.25, pfTop + bH / 2, 0.3, bH - 0.4, hallLen);
+      for (let z = -hallLen / 2; z <= hallLen / 2 + 0.1; z += 4.5) box(louvre, z, front + out * 0.45, pfTop + bH / 2, 0.15, bH - 0.4, 0.18, false);
+      for (const y of [bH * 0.33, bH * 0.66]) box(louvre, 0, front + out * 0.45, pfTop + y, 0.15, 0.16, hallLen, false);
+      // side wings: grey louvred blocks
+      for (const e of [-1, 1]) for (let y = 1; y < bH - 1; y += 0.9) box(louvre, e * (hallLen / 2 + (bLen - hallLen) / 4), front + out * 0.2, pfTop + y, 0.12, 0.12, (bLen - hallLen) / 2 - 2, false);
+      // the roof: a thin slab, rising in steps (a smooth sweep) at both ends
+      box(roofM, 0, rLat, rY, rW, 0.7, hallLen + 6);
+      box(P(0x9ea4ac), 0, rLat + out * (rW / 2 - 0.1), rY - 0.15, 0.25, 1.0, hallLen + 6, false); // fascia
+      for (const e of [-1, 1]) for (let k = 1; k <= 6; k++) {
+        const z = e * (hallLen / 2 + 3 + k * 2.4), up = 0.12 * k * k;
+        box(roofM, z, rLat, rY + up, rW - k * 0.4, 0.7, 2.6);
+      }
+      // raked columns: lean out under the overhang, in V pairs
+      for (let k = -2; k <= 2; k++) {
+        if (k === 0) continue;
+        const z = k * (hallLen / 5);
+        box(colM, z, front + out * (overhang * 0.45), pfTop + (bH + 1) / 2, 0.8, bH + 2.4, 0.8, true, out * 0.42 * Math.sign(k), 0);
+      }
+      // entrance portal
+      box(P(0xd9d6cf), 0, front + out * 3.2, pfTop + 3.4, 6, 0.6, 15);
+      for (const o of [-7, 7]) box(P(0xd9d6cf), o, front + out * 3.2, pfTop + 1.7, 6, 3.4, 0.7);
+      // name on the roof fascia, and the forecourt with autos and plantings
+      bat.box(M.facadeSign(name), rLat + out * (rW / 2 + 0.05), rY - 0.15, 0, 0.1, 1.4, Math.min(48, hallLen * 0.6), 0, false);
+      if (c.local && c.traffic) { // autos and cars circulating on the drop-off road in front of the building
+        const pts = [];
+        for (let ds = -bLen * 0.6; ds <= bLen * 0.6; ds += 10) pts.push({ x: front + out * 24, y: pfTop + 0.05, z: -ds });
+        c.traffic.push(new RoadTraffic(c.local, pts, { count: 10, rand: c.rand, laneOff: 2.0, mix: ['auto', 'auto', 'auto', 'car', 'car', 'bike', 'suv'] }));
+      }
+      for (let z = -hallLen / 2; z <= hallLen / 2; z += 6) box(P(0x3f7d2c), z, front + out * 19, pfTop + 0.5, 2.2, 1.0, 4.5, false); // hedge beds
+      // forecourt as built: lawns and paved walks, the I ♥ GUNTAKAL sign, the national flag, a fountain, parking
+      const lawn = P(0x4f9a3a), paving = P(0xd9b48a), road = P(0x3a3f47);
+      const fx = front + out * 48;                                 // centre of the forecourt
+      box(road, 0, front + out * 24, pfTop + 0.04, 9, 0.08, bLen * 1.2, false);           // drop-off road along the building
+      box(paving, 0, fx, pfTop + 0.05, 46, 0.06, 92, false);                                // plaza
+      for (const [z, w, d] of [[-30, 18, 22], [30, 18, 22], [0, 14, 30]]) box(lawn, z, fx + out * (z === 0 ? 10 : -4), pfTop + 0.12, w, 0.14, d, false);
+      for (let k = 0; k < 9; k++) box(lawn, -40 + k * 10, fx - out * 18, pfTop + 0.12, 3.5, 0.14, 7, false); // planters along the walk
+      // fountain
+      bat.cyl(P(0xbfc5cc), fx + out * 2, pfTop + 0.35, 0, 4.2, 4.4, 0.7, 24);
+      bat.cyl(new THREE.MeshStandardMaterial({ color: 0x3fa9e0, metalness: 0.2, roughness: 0.1 }), fx + out * 2, pfTop + 0.62, 0, 3.8, 3.8, 0.1, 24);
+      // national flag on a tall mast
+      bat.cyl(P(0xe6e6e6), fx - out * 6, pfTop + 15, -12, 0.12, 0.22, 30, 10);
+      const flagX = fx - out * 6;
+      for (const [y, col] of [[28.6, 0xff9933], [27.6, 0xf8f8f8], [26.6, 0x138808]]) bat.box(P(col), flagX, pfTop + y, -12 - 2.3, 0.08, 1.0, 4.4, 0, false);
+      bat.cyl(P(0x1a237e), flagX + 0.05 * out, pfTop + 27.6, -14.3, 0.34, 0.34, 0.1, 16, 0, 0, Math.PI / 2); // Ashoka Chakra
+      // I ♥ GUNTAKAL letters on a plinth in the front lawn, facing the road
+      box(P(0xf2f2f2), 18, fx + out * 16, pfTop + 0.6, 1.4, 1.2, 16, false);
+      bat.box(M.textBoard('I ♥ GUNTAKAL', { bg: '#ffffff', fg: '#d61f2c', w: 1024, h: 192, font: 'bold 120px Arial' }), fx + out * 16.8, pfTop + 2.1, -18, 0.3, 1.9, 15, 0, true);
+      // shade canopies over the walkway and a car park with a few cars
+      for (let k = 0; k < 8; k++) box(P(0xf2f2f2), -bLen * 0.3 + k * 6.5, front + out * 30, pfTop + 3.2, 3.4, 0.2, 5.6, false);
+      for (let k = 0; k < 10; k++) box(P([0xffffff, 0xb0b5bb, 0x1f4e8c, 0xa31515, 0x222222][k % 5]), 34 + (k % 5) * 3.2, fx + out * (k < 5 ? 6 : 12), pfTop + 0.75, 1.8, 1.4, 4.2);
+      c.towerW = 0;
+      break;
+    }
     case 'gothic': { // CSMT
       bands(3); arcade(pfTop, bH - 1, 3.6, acc);
       // central octagonal drum, ribbed dome, statue spire

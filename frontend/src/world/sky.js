@@ -11,7 +11,7 @@ import { mulberry32 } from '../core/rng.js';
 const WEATHER = {
   CLEAR:   { turbidity: 5.5, rayleigh: 1.5, mie: 0.004, cover: 0.32, density: 0.45, fog: 0.00021, sun: 1.0, fogTint: [1, 1, 1] },
   HAZE:    { turbidity: 11,  rayleigh: 1.1, mie: 0.008, cover: 0.2,  density: 0.3,  fog: 0.00055, sun: 0.85, fogTint: [1.05, 1.0, 0.92] },
-  MONSOON: { turbidity: 14,  rayleigh: 0.7, mie: 0.01,  cover: 0.96, density: 0.92, fog: 0.0016,  sun: 0.35, fogTint: [0.7, 0.74, 0.78] },
+  MONSOON: { turbidity: 14,  rayleigh: 0.7, mie: 0.01,  cover: 0.96, density: 0.92, fog: 0.0027,  sun: 0.35, fogTint: [0.7, 0.74, 0.78] },
   FOG:     { turbidity: 20,  rayleigh: 0.4, mie: 0.02,  cover: 0.7,  density: 0.6,  fog: 0.0062,  sun: 0.4,  fogTint: [0.92, 0.92, 0.94] }
 };
 
@@ -244,7 +244,7 @@ export class SkySystem {
     // sun & moon (shadow frustum snapped to texels to avoid shimmering)
     const sunCol = new THREE.Color().setRGB(1, 0.93 - golden * 0.25, 0.84 - golden * 0.45);
     this.sun.color.copy(sunCol);
-    this.sun.intensity = 2.5 * day * W.sun;
+    this.sun.intensity = 2.2 * day * W.sun; // softer key light ...
     const lightDir = this.sunDir.y > 0.02 ? this.sunDir : new THREE.Vector3(this.sunDir.x, 0.05, this.sunDir.z).normalize();
     const texel = 340 / this.sun.shadow.mapSize.x;
     const fx = Math.round(focus.x / texel) * texel, fz = Math.round(focus.z / texel) * texel;
@@ -292,17 +292,17 @@ export class SkySystem {
     this.nightMat.opacity = Math.min(0.92, deepNight * (weatherKey === 'FOG' ? 0.6 : 1));
     this.fogDome.position.copy(camera.position);
     this.fogDomeMat.color.setRGB(f[0], f[1], f[2]);
-    this.fogDomeMat.opacity = weatherKey === 'FOG' ? 1 : weatherKey === 'MONSOON' ? 0.45 : weatherKey === 'HAZE' ? 0.22 : 0;
+    this.fogDomeMat.opacity = weatherKey === 'FOG' ? 1 : weatherKey === 'MONSOON' ? 0.62 : weatherKey === 'HAZE' ? 0.22 : 0;
     // sun colour: deep orange near the horizon, moonlight bluish at night
     const low = 1 - THREE.MathUtils.smoothstep(this.sunDir.y, 0.0, 0.3);
     this.sun.color.setRGB(1, 0.94 - low * 0.38, 0.86 - low * 0.62);
     this.hemi.color.setRGB(0.45 + 0.35 * day + golden * 0.15, 0.5 + 0.32 * day, 0.75 + 0.1 * day - golden * 0.1);
     this.hemi.groundColor.setRGB(0.18 + 0.2 * day + golden * 0.1, 0.14 + 0.12 * day, 0.11 + 0.06 * day);
-    this.hemi.intensity = 0.1 + 0.32 * day + this.night * 0.12;
+    this.hemi.intensity = 0.16 + 0.62 * day + this.night * 0.12; // ... and much more sky fill: open shadows, less harsh contrast in clear weather
     this.moon.color.setRGB(0.55, 0.65, 1.0);
 
     // nights stay dark (less exposure lift); fog is dim and flat, not glowing
-    this.renderer.toneMappingExposure = (0.48 + 0.12 * golden + 0.3 * this.night) * (weatherKey === 'FOG' ? 0.86 : 1);
+    this.renderer.toneMappingExposure = (0.48 + 0.12 * golden + 0.3 * this.night) * (weatherKey === 'FOG' ? 0.86 : 1) * (this.renderer.exposureScale || 1);
 
     // Re-bake reflections only when the lighting phase or weather changes: a PMREM
     // bake renders a full cube + blur and would otherwise hitch the frame rate.

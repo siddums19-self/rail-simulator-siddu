@@ -14,7 +14,28 @@ export const RANKS = [
   { xp: 16000, title: 'Loco Inspector', duty: 'All duties' }
 ];
 
-export const newCareer = () => ({ v: 1, xp: 0, km: 0, runs: 0, completed: 0, onTime: 0, spads: 0, incidents: 0, bestScore: 0, history: [] });
+export const newCareer = () => ({ v: 1, xp: 0, km: 0, runs: 0, completed: 0, onTime: 0, spads: 0, incidents: 0, bestScore: 0, history: [], games: {} });
+
+// Game modes that post to the leaderboards
+// Achievements (kept in the career; ctx = what just happened)
+export const ACHIEVEMENTS = [
+  { id: 'first-run', icon: '🚆', title: 'First departure', desc: 'Complete your first journey', test: (c) => c.completed >= 1 },
+  { id: 'km100', icon: '🛤', title: 'Century', desc: 'Drive 100 km', test: (c) => c.km >= 100 },
+  { id: 'km1000', icon: '🧭', title: 'Long hauler', desc: 'Drive 1,000 km', test: (c) => c.km >= 1000 },
+  { id: 'ontime5', icon: '⏱', title: 'Like clockwork', desc: 'Arrive on time 5 times', test: (c) => c.onTime >= 5 },
+  { id: 'clean50', icon: '🛡', title: 'Clean sheet', desc: 'Finish a run of 50 km+ with no SPAD', test: (c, x) => x.kind === 'run' && x.completed && x.km >= 50 && !x.spads },
+  { id: 'smooth', icon: '☕', title: 'Not a drop spilled', desc: 'Finish a run with 95%+ passenger comfort', test: (c, x) => x.kind === 'run' && x.completed && x.comfort >= 95 },
+  { id: 'five-star', icon: '⭐', title: 'Five-star service', desc: 'Get a 5-star passenger rating', test: (c, x) => x.kind === 'run' && x.stars >= 5 },
+  { id: 'suburban', icon: '🚇', title: 'Local hero', desc: 'Complete a suburban run (Mumbai or MMTS)', test: (c, x) => x.kind === 'run' && x.completed && x.suburban },
+  { id: 'sm50', icon: '🏛', title: 'Master of the yard', desc: 'Handle 50 trains in one Station Master shift', test: (c, x) => x.kind === 'station' && x.trains >= 50 },
+  { id: 'ctl', icon: '📈', title: 'In control', desc: 'Finish a Section Controller shift', test: (c, x) => x.kind === 'controller' },
+  { id: 'daily', icon: '📅', title: 'Daily commuter', desc: 'Complete a daily challenge', test: (c, x) => x.kind === 'daily' },
+  { id: 'mp', icon: '🏁', title: 'Race day', desc: 'Finish a multiplayer race', test: (c, x) => x.kind === 'mp' }
+];
+
+export const GAME_MODES = { drive: 'Train driving', station: 'Station Master', controller: 'Section Controller', wayside: 'Wayside Station Master', daily: 'Daily challenge' };
+const GUEST_KEY = 'railsim.guestName', SCORES_KEY = 'railsim.scores';
+const PERIOD_MS = { daily: 864e5, weekly: 7 * 864e5, monthly: 30 * 864e5 };
 
 export function rankOf(xp) {
   let i = 0;
@@ -61,6 +82,52 @@ export class Account {
 
   get guest() { return !this.email; }
 
+  // returns the achievements unlocked by this event
+  checkAchievements(x = {}) {
+    const c = this.career; c.ach ||= {};
+    const got = [];
+    for (const a of ACHIEVEMENTS) if (!c.ach[a.id]) { try { if (a.test(c, x)) { c.ach[a.id] = new Date().toISOString(); got.push(a); } } catch { /* ignore */ } }
+    if (got.length) { this.dirty = true; this.save(); }
+    return got;
+  }
+
+  // Name shown on the leaderboards: the guest's chosen name, or the account's email name
+  get guestName() { return (ls.get(GUEST_KEY) || '').trim(); }
+  set guestName(v) { ls.set(GUEST_KEY, String(v || '').trim().slice(0, 30) || null); }
+  get displayName() { return this.guest ? (this.guestName || 'Guest') : this.email.split('@')[0]; }
+
+  // A finished game of any mode: kept in the career and posted to the leaderboards.
+  async recordGame({ mode, venue = '', score = 0, trains = 0, avgDelay = null }) {
+    const c = this.career;
+    c.games ||= {};
+    const g = (c.games[mode] ||= { played: 0, best: null, trains: 0, total: 0 });
+    g.played++; g.trains += trains; g.total += score; g.best = g.best === null ? score : Math.max(g.best, score);
+    if (mode !== 'drive') c.xp += Math.max(0, Math.round(score / 20));
+    this.dirty = true;
+    this.save();
+    const entry = { playerName: this.displayName, mode, venue, score: Math.round(score), trains, avgDelay, playedAt: new Date().toISOString(), guest: this.guest };
+    try { // local copy: offline leaderboard
+      const all = JSON.parse(ls.get(SCORES_KEY) || '[]');
+      all.push(entry);
+      ls.set(SCORES_KEY, JSON.stringify(all.filter((e) => Date.now() - Date.parse(e.playedAt) < PERIOD_MS.monthly).slice(-400)));
+    } catch { /* ignore */ }
+    api('/scores', { method: 'POST', body: entry, token: this.token }).catch(() => {});
+  }
+
+  // Top 10 for a mode over the last day / week / month (server; this device's games when offline)
+  async leaderboard(mode, period = 'daily') {
+    try {
+      const rows = await api(`/leaderboard?mode=${encodeURIComponent(mode)}&period=${period}`, { timeout: 4000 });
+      return { rows, online: true };
+    } catch {
+      let all = [];
+      try { all = JSON.parse(ls.get(SCORES_KEY) || '[]'); } catch { /* ignore */ }
+      const rows = all.filter((e) => e.mode === mode && Date.now() - Date.parse(e.playedAt) < PERIOD_MS[period])
+        .sort((a, b) => b.score - a.score).slice(0, 10);
+      return { rows, online: false };
+    }
+  }
+
   // Resume a saved session. Returns true when logged in.
   async resume() {
     if (!this.token) return false;
@@ -94,9 +161,14 @@ export class Account {
     ls.set(TOKEN_KEY, r.token);
     this._adopt(r.email, r.career);
     // progress made as a guest this session is carried into the account
-    if (guestCareer && (guestCareer.km > 0 || guestCareer.runs > 0)) {
+    if (guestCareer && (guestCareer.km > 0 || guestCareer.runs > 0 || Object.keys(guestCareer.games || {}).length)) {
       const c = this.career;
       for (const k of ['xp', 'km', 'runs', 'completed', 'onTime', 'spads', 'incidents']) c[k] += guestCareer[k];
+      c.games ||= {};
+      for (const [m, g] of Object.entries(guestCareer.games || {})) {
+        const t = (c.games[m] ||= { played: 0, best: null, trains: 0, total: 0 });
+        t.played += g.played; t.trains += g.trains; t.total += g.total; t.best = t.best === null ? g.best : Math.max(t.best, g.best ?? t.best);
+      }
       c.bestScore = Math.max(c.bestScore, guestCareer.bestScore);
       c.history = [...guestCareer.history, ...c.history].slice(0, 12);
       this.dirty = true;

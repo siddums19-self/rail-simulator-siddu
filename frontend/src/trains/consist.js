@@ -42,15 +42,22 @@ function wrapReversed(v) {
   return { ...v, group: outer, reversed: true };
 }
 
-function addCabFace(v) {
+function addCabFace(v, face = null) {
   const L = v.length;
+  // a driving cab has no gangway connector at its front
+  for (const o of v.group.children.filter((c) => c.userData.frontGangway)) o.removeFromParent();
+  if (face) { // painted cab front (Mumbai local: yellow; MMTS: white with a blue frame)
+    const fm = new THREE.MeshStandardMaterial({ color: face.color, roughness: 0.5 });
+    const p = new THREE.Mesh(new THREE.BoxGeometry(2.9, 2.3, 0.08), fm); p.position.set(0, 2.55, -L / 2 - 0.03); v.group.add(p);
+    if (face.frame) { const f = new THREE.Mesh(new THREE.BoxGeometry(2.7, 1.15, 0.06), new THREE.MeshStandardMaterial({ color: face.frame, roughness: 0.5 })); f.position.set(0, 3.0, -L / 2 - 0.06); v.group.add(f); }
+  }
   const glass = new THREE.MeshStandardMaterial({ color: 0x0b1118, metalness: 0.9, roughness: 0.05 });
   const ws = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.9), glass);
-  ws.position.set(0, 3.0, -L / 2 - 0.01); ws.rotation.y = Math.PI; v.group.add(ws);
+  ws.position.set(0, 3.0, -L / 2 - (face ? 0.1 : 0.01)); ws.rotation.y = Math.PI; v.group.add(ws);
   const head = new THREE.MeshStandardMaterial({ color: 0xfff6d8, emissive: 0xfff2c8, emissiveIntensity: 4 });
   for (const x of [-0.9, 0.9]) {
     const hl = new THREE.Mesh(new THREE.CircleGeometry(0.13, 12), head);
-    hl.position.set(x, 1.85, -L / 2 - 0.01); hl.rotation.y = Math.PI; v.group.add(hl);
+    hl.position.set(x, 1.85, -L / 2 - (face ? 0.1 : 0.01)); hl.rotation.y = Math.PI; v.group.add(hl);
   }
   v.headPos = new THREE.Vector3(0, 2.4, -L / 2 - 0.2);
   v.cabEye = new THREE.Vector3(-0.6, 2.95, -L / 2 + 1.2);
@@ -59,19 +66,35 @@ function addCabFace(v) {
 export const LOCOS = {
   WAP7: { label: 'WAP-7 (electric, 25 kV)', traction: 'electric', build: () => buildLoco('WAP7', '30512', { cabBothEnds: true }) },
   WDP4D: { label: 'WDP-4D (diesel)', traction: 'diesel', build: () => buildLoco('WDP4D', '40125', { cabBothEnds: true }) },
-  WAG12: { label: 'WAG-12B (electric, heavy freight)', traction: 'electric', build: () => buildLoco('WAG12', '70012', { cabBothEnds: true }) }
+  WAG12: { label: 'WAG-12B (electric, heavy freight)', traction: 'electric', build: () => buildLoco('WAG12', '70012', { cabBothEnds: true }) },
+  WAG9: { label: 'WAG-9 ×2 (electric, multiple unit)', traction: 'electric', build: () => buildLoco('WAG9', '31248', { cabBothEnds: true }) }
 };
-export const isMultipleUnit = (rakeType) => rakeType === 'VANDE_BHARAT' || rakeType === 'DEMU_PASSENGER';
+export const isMultipleUnit = (rakeType) => /VANDE_BHARAT|DEMU_PASSENGER|MUMBAI_LOCAL|MMTS_LOCAL/.test(rakeType);
 export const defaultLoco = (rakeType) => ({ ICF: 'WDP4D', BOXN_GOODS: 'WAG12' }[rakeType] || 'WAP7');
+
+// A real express rake: general (GS) at both ends, sleepers (non-AC) and AC 3-tier / 2-tier / first AC in between.
+function mixedCodes(n) {
+  if (n <= 3) return ['GS', 'S1', 'B1'].slice(0, n);
+  const inner = n - 2, ac = Math.max(1, Math.round(inner * 0.45)), sl = inner - ac;
+  const codes = ['GS'];
+  for (let i = 1; i <= sl; i++) codes.push(`S${i}`);
+  const acList = [];
+  for (let i = 1; acList.length < ac; i++) { acList.push(`B${i}`); if (acList.length < ac && i % 3 === 0) acList.push(`A${i / 3}`); }
+  if (ac >= 5) acList[acList.length - 1] = 'H1';
+  codes.push(...acList, 'GS');
+  return codes;
+}
 
 export function makeVehicles(rakeType, cars, loco = null) {
   const list = [];
   switch (rakeType) {
-    case 'VANDE_BHARAT': {
+    case 'VANDE_BHARAT':
+    case 'VANDE_BHARAT_ORANGE': {
       const n = Math.max(4, cars ?? 8);
+      const kind = rakeType === 'VANDE_BHARAT_ORANGE' ? 'VBO' : 'VB';
       for (let i = 0; i < n; i++) {
         const ends = i === 0 || i === n - 1;
-        let v = buildCoach('VB', COACH_CODES.VB[i % 3], { noseFront: ends });
+        let v = buildCoach(kind, COACH_CODES.VB[i % 3], { noseFront: ends });
         if (i === n - 1) v = wrapReversed(v);
         list.push(v);
       }
@@ -80,21 +103,44 @@ export function makeVehicles(rakeType, cars, loco = null) {
     case 'ICF': {
       list.push(loco ? LOCOS[loco].build() : buildLoco('WDP4D', '40125', { cabBothEnds: true }));
       const n = cars ?? 10;
-      for (let i = 0; i < n; i++) list.push(buildCoach('ICF', COACH_CODES.ICF[i % 3]));
+      const codes = mixedCodes(n);
+      for (let i = 0; i < n; i++) list.push(buildCoach('ICF', codes[i]));
       break;
     }
-    case 'DEMU_PASSENGER': {
-      const n = Math.max(3, cars ?? 6);
+    case 'ICF_CREAM':
+    case 'JAN_SHATABDI': {
+      list.push(loco ? LOCOS[loco].build() : buildLoco('WDP4D', '40211', { cabBothEnds: true }));
+      const n = cars ?? 10;
+      const kind = rakeType === 'ICF_CREAM' ? 'ICFC' : 'ICFG';
+      const codes = rakeType === 'JAN_SHATABDI' ? Array.from({ length: n }, (_, i) => (i === 1 || i === 2 ? `C${i}` : `D${i + 1}`)) : mixedCodes(n);
+      for (let i = 0; i < n; i++) list.push(buildCoach(kind, codes[i]));
+      break;
+    }
+    case 'GARIB_RATH': { // all AC 3-tier, green and yellow
+      list.push(loco ? LOCOS[loco].build() : buildLoco('WAP7', '30461', { cabBothEnds: true }));
+      const n = cars ?? 12;
+      for (let i = 0; i < n; i++) list.push(buildCoach('GR', `G${i + 1}`));
+      break;
+    }
+    case 'DEMU_PASSENGER':
+    case 'MUMBAI_LOCAL':
+    case 'MMTS_LOCAL': {
+      const n = Math.max(3, cars ?? (rakeType === 'MUMBAI_LOCAL' ? 12 : rakeType === 'MMTS_LOCAL' ? 9 : 6));
+      const kind = rakeType === 'MUMBAI_LOCAL' ? 'EMU' : rakeType === 'MMTS_LOCAL' ? 'MMTS' : 'DEMU';
       for (let i = 0; i < n; i++) {
-        let v = buildCoach('DEMU', COACH_CODES.DEMU[i % 3]);
-        if (i === 0) addCabFace(v);
-        if (i === n - 1) { addCabFace(v); v = wrapReversed(v); }
+        let v = buildCoach(kind, COACH_CODES.DEMU[i % 3]);
+        const face = kind === 'EMU' ? { color: 0xf2c418 } : kind === 'MMTS' ? { color: 0xf4f4f0, frame: 0x2c73b5 } : null;
+        if (i === 0) addCabFace(v, face);
+        if (i === n - 1) { addCabFace(v, face); v = wrapReversed(v); }
         list.push(v);
       }
       break;
     }
     case 'BOXN_GOODS': {
-      if (loco && loco !== 'WAG12') list.push(LOCOS[loco].build());
+      if (loco === 'WAG9') { // two WAG-9s in multiple, coupled back to back
+        list.push(buildLoco('WAG9', '31248', { cabBothEnds: false }));
+        list.push(wrapReversed(buildLoco('WAG9', '31252', { cabBothEnds: false })));
+      } else if (loco && loco !== 'WAG12') list.push(LOCOS[loco].build());
       else { list.push(buildLoco('WAG12', '70012', { cabBothEnds: false })); list.push(wrapReversed(buildLoco('WAG12', '70012', { cabBothEnds: false }))); }
       const n = cars ?? 26;
       for (let i = 0; i < n; i++) list.push(buildBOXN());
@@ -112,14 +158,15 @@ export function makeVehicles(rakeType, cars, loco = null) {
     default: {
       list.push(loco ? LOCOS[loco].build() : buildLoco('WAP7', '30512', { cabBothEnds: true }));
       const n = cars ?? 10;
-      for (let i = 0; i < n; i++) list.push(buildCoach('LHB', COACH_CODES.LHB[i % 3]));
+      const codes = mixedCodes(n);
+      for (let i = 0; i < n; i++) list.push(buildCoach('LHB', codes[i]));
     }
   }
   return list;
 }
 
-const LOCO_KINDS = new Set(['WAP7', 'WAG12', 'WDP4D']);
-const cabOpts = (v) => (LOCO_KINDS.has(v.kind) ? { floorY: 1.85, inset: 0.2, halfW: 1.38 } : { floorY: 1.5, inset: v.kind === 'VB' ? 1.3 : 0.25, halfW: 1.42 });
+const LOCO_KINDS = new Set(['WAP7', 'WAG12', 'WAG9', 'WDP4D']);
+const cabOpts = (v) => (LOCO_KINDS.has(v.kind) ? { floorY: 1.85, inset: 0.2, halfW: 1.38 } : { floorY: 1.5, inset: v.kind === 'VB' || v.kind === 'VBO' ? 1.3 : 0.25, halfW: 1.42 });
 
 const _pf = new THREE.Vector3(), _pr = new THREE.Vector3();
 

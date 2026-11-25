@@ -3,7 +3,7 @@ import { M } from '../core/materials.js';
 import { Batcher } from '../core/batcher.js';
 import { makeRng, pick, range, smoothstep } from '../core/rng.js';
 import { TRACK } from '../config.js';
-import { GTL_SPECIAL } from '../route/layout.js';
+import { GTL_SPECIAL, GTL_GOOTY_LADDER } from '../route/layout.js';
 import { GTL_LADDER } from '../route/stationLayout.js';
 import { TrackChunkBuilder, polylineFrames } from './trackBuilder.js';
 import { GeoAccum, meshFrom } from './geoAccum.js';
@@ -119,20 +119,8 @@ export function buildGtlJunction(layout, { seedKey, terrainFlat }) {
   for (const l of allLines) index.add(l, 2);
   for (const l of bell) bellaryIndex.add(l, 1);
 
-  // --- Road-over-Bridge 450 m past the GTL throat, spanning every line here.
-  const ROB_A = 450;
-  const R0v = { x: Math.cos(H0), z: Math.sin(H0) };
-  const lats = single ? [0] : [-H, H];
-  for (const line of allLines) {
-    if (line[0].a > ROB_A - 20 || line[line.length - 1].a < ROB_A + 20) continue;
-    let best = null;
-    for (const p of line) { const along = (p.x - P0.x) * Math.sin(H0) - (p.z - P0.z) * Math.cos(H0); if (!best || Math.abs(along - ROB_A) < Math.abs(best.along - ROB_A)) best = { along, p }; }
-    lats.push((best.p.x - P0.x) * R0v.x + (best.p.z - P0.z) * R0v.z);
-  }
-  lats.sort((p, q) => p - q);
-  const piers = [];
-  for (let i = 0; i + 1 < lats.length; i++) if (lats[i + 1] - lats[i] > 5.8) piers.push((lats[i] + lats[i + 1]) / 2);
-  const rob = buildROB(group, P0, H0, ROB_A, { piers, abutL: lats[0] - 9.5, abutR: lats[lats.length - 1] + 6.5, seedKey });
+  // --- Road-over-rail bridge 300 m past the platform ends, spanning the running lines there.
+  const rob = buildGtlROB(group, layout, gtl, P0, H0, allLines, seedKey);
 
   const bridgeA = -1e9, bridgeB = -1e9;
 
@@ -141,10 +129,12 @@ export function buildGtlJunction(layout, { seedKey, terrainFlat }) {
   for (const l of allLines) tb.addTrack(polylineFrames(l));
   tb.build(group);
   buildSideOHE(group, [...gooty, goodsLine], crossPt, (x, z) => rob.nearMast(x, z) && rob.contains(x, z));
+  buildAtpDirect(group, layout, gtl, P0, H0, index, (x, z) => rob.contains(x, z, 4));
 
   // --- Foot over bridge on the curve: from the left of the Dhone line across the
   // Dhone and Gooty tracks to the right-hand side.
-  buildJunctionFOB(group, path, gtl, gooty, index);
+  const fobEnds = buildJunctionFOB(group, path, gtl, [gooty[0], goodsLine], index); // spans out to the goods line
+  if (fobEnds) buildFobEndBuildings(group, fobEnds, index, makeRng(seedKey, 'gtl-fob'), rob);
 
   // --- Boards at the divergence
   const bat = new Batcher();
@@ -174,11 +164,66 @@ export function buildGtlJunction(layout, { seedKey, terrainFlat }) {
     return bellaryIndex.distance(p.x, p.z, 40) < 7 || index.distance(p.x, p.z, 40) < 3.5 || (rob.nearMast(p.x, p.z) && rob.contains(p.x, p.z)) || Math.abs(s - vv.roadS) < 6;
   };
 
-  const animate = (dt) => vv.animate(dt);
+  const animate = (dt) => { vv.animate(dt); rob.animate?.(dt); };
   return { group, index, exclusion, skipPier, skipMast, crossU, aCurve, bridgeA, bridgeB, lcS: vv.roadS, animate, drm: !!drm, vvSide: gtl.dir > 0 ? 'RIGHT' : 'LEFT', solved: !!best };
 }
 
-function buildSideOHE(group, lines, crossPt, skip = null) {
+
+// ------------------------------------------------------------- Anantapur direct line
+// Guntakal - Anantapur direct line (avoids Gooty). It leaves the east end from PF 1 and PF 2 only
+// (the right-hand platforms facing Gooty) and bends right straight away, so it never reaches the
+// road-over-bridge 300 m out; then it swings back towards Anantapur, clear of the Gooty lines.
+function buildAtpDirect(group, layout, gtl, P0, H0, index, skipMast = null) {
+  const st = gtl.station, path = layout.path;
+  const pfLat = (no) => {
+    const t = st.layout.tracks.find((x) => x.pf === no);
+    if (!t) return null;
+    const s = st.layout && (gtl.dir > 0 ? st.layout.pEnd : st.layout.pStart);
+    return gtl.dir * t.lane.at(s);
+  };
+  const l1 = pfLat(1), l2 = pfLat(2);
+  if (l1 === null || l2 === null) return null;
+  // the outer of the two takes the outside of the curve (further right)
+  const outer = Math.max(l1, l2), gap = Math.max(4.6, Math.abs(l1 - l2));
+  const a0 = gtl.uOfD(0);                      // branches off PF 1 / 2 at the platform end
+  // turnout: curvature builds up over 70 m (no kink), then a 180 m curve turning a little past square so the
+  // line heads away from the road-over-bridge (never more than ~250 m out from the platform ends); well clear
+  // of the ROB's approach road it swings back left towards Anantapur
+  const Rc = 180, turn1 = (96 * Math.PI) / 180, ramp = 70;
+  const run = 720, R2 = 900, turn2 = (-55 * Math.PI) / 180, total = 3400, step = 2;
+  const F = { x: Math.sin(H0), z: -Math.cos(H0) }, Rt = { x: Math.cos(H0), z: Math.sin(H0) };
+  const y0 = path.yAt(gtl.boundary);
+  const centre = [];
+  let x = P0.x + F.x * a0 + Rt.x * outer, z = P0.z + F.z * a0 + Rt.z * outer, th = H0, t1 = 0, t2 = 0, sRun = 0;
+  for (let d = 0; d <= total; d += step) {
+    const n = path.nearest(x, z);
+    const g = n.dist < 4000 ? path.groundAt(n.s) : y0;
+    const kk = smoothstep(500, 1100, d);
+    centre.push({ x, z, th, y: y0 * (1 - kk) + g * kk, a: a0 + d });
+    let k = 0;
+    if (t1 < turn1) { k = Math.min(1, (d + step / 2) / ramp) / Rc; t1 += k * step; }
+    else if (sRun < run) sRun += step;
+    else if (t2 < Math.abs(turn2)) { k = -1 / R2; t2 += step / R2; }
+    const tm = th + (k * step) / 2;
+    x += Math.sin(tm) * step; z -= Math.cos(tm) * step; th += k * step;
+  }
+  const inner = centre.map((p) => ({ ...p, x: p.x - Math.cos(p.th) * gap, z: p.z - Math.sin(p.th) * gap }));
+  const lines = [inner, centre];
+  for (const l of lines) index.add(l, 2);
+  const tb = new TrackChunkBuilder();
+  for (const l of lines) tb.addTrack(polylineFrames(l));
+  tb.build(group);
+  buildSideOHE(group, lines, new THREE.Vector3(1e9, 0, 1e9), skipMast);
+  // junction board beside PF 1 / 2 starter
+  const bat = new Batcher();
+  const bx = P0.x + F.x * (a0 - 10) + Rt.x * (outer + 5), bz = P0.z + F.z * (a0 - 10) + Rt.z * (outer + 5);
+  bat.box(M.textBoard('ANANTAPUR (DIRECT)  ➘\nPF 1 & 2 ONLY', { bg: '#f5c518', fg: '#111', w: 768, h: 192, font: 'bold 54px Arial' }), bx, y0 + 3.2, bz, 5.2, 1.3, 0.12, -H0 + (gtl.dir > 0 ? 0 : Math.PI), true);
+  for (const o of [-2.2, 2.2]) bat.box(M.steelDark(), bx + Rt.x * o, y0 + 1.3, bz + Rt.z * o, 0.12, 2.6, 0.12, 0, false);
+  group.add(bat.build());
+  return lines;
+}
+
+export function buildSideOHE(group, lines, crossPt, skip = null) {
   const bat = new Batcher();
   const wires = new GeoAccum(false);
   const contactBase = TRACK.RAIL_TOP + TRACK.CONTACT_WIRE;
@@ -219,7 +264,7 @@ function buildVVNagar(layout, seedKey, bellaryIndex) {
   const gtl = layout.gtl;
   const path = layout.path;
   const rand = makeRng(seedKey, 'vvnagar');
-  const sVV = gtl.uToS(GTL_SPECIAL.vvNagarU);
+  const sVV = gtl.uToS(gtl.uOfD(GTL_SPECIAL.vvNagarD));
   const latSign = gtl.dir; // away-from-GTL right side
   const origin = path.pointAt(sVV, latSign * GTL_SPECIAL.vvNagarLat, new THREE.Vector3());
   origin.y = path.groundAt(sVV);
@@ -428,7 +473,7 @@ function plantTrees(group, trees) {
 function buildDRMOffice(layout, seedKey, index, bellaryIndex) {
   const gtl = layout.gtl, path = layout.path;
   const rand = makeRng(seedKey, 'drm');
-  const s = gtl.uToS(GTL_SPECIAL.drmU);
+  const s = gtl.uToS(gtl.uOfD(GTL_SPECIAL.drmD));
   const side = -gtl.dir; // left of the train departing GTL
   const th = path.headingAt(s);
   // find the nearest clear site (away from the Bellary and Gooty lines)
@@ -504,7 +549,7 @@ function buildDRMOffice(layout, seedKey, index, bellaryIndex) {
 }
 
 function buildJunctionFOB(group, path, gtl, gooty, index) {
-  const sF = gtl.uToS(1150);
+  const sF = gtl.uToS(gtl.uOfD(GTL_SPECIAL.fobD));
   const D = path.pointAt(sF, 0, new THREE.Vector3());
   let G = null, bd = Infinity;
   for (const p of gooty[1]) { const d = (p.x - D.x) ** 2 + (p.z - D.z) ** 2; if (d < bd) { bd = d; G = p; } }
@@ -544,4 +589,215 @@ function buildJunctionFOB(group, path, gtl, gooty, index) {
     for (const side of [-1, 1]) bat.box(green, ex + px * side * 1.2, y0 + rise / 2 + 0.9, ez + pz * side * 1.2, hyp, 0.06, 0.06, ry, false, 0, -end * ang);
   }
   group.add(bat.build());
+  // stair feet with the outward direction, for the buildings at either end
+  return [-1, 1].map((end) => ({ x: cx + ux * end * (len / 2 + run), z: cz + uz * end * (len / 2 + run), ux: ux * end, uz: uz * end, y: y0 }));
+}
+
+// ------------------------------------------------------------- Gooty route
+// A side line (here the Dhone line) as a path-like object indexed by its own
+// distance a, with the same interface the structure builders use on the route path.
+function sidePath(pts) {
+  const n = pts.length, st = pts[1].a - pts[0].a, a0 = pts[0].a;
+  const at = (a) => {
+    const f = Math.min(n - 1.0001, Math.max(0, (a - a0) / st));
+    const i = Math.floor(f);
+    return [pts[i], pts[i + 1], f - i];
+  };
+  const lerp = (p, q, t, k) => p[k] + (q[k] - p[k]) * t;
+  return {
+    length: pts[n - 1].a,
+    pointAt(a, lat = 0, out = new THREE.Vector3(), yOff = 0) {
+      const [p, q, t] = at(a);
+      const th = lerp(p, q, t, 'th');
+      return out.set(lerp(p, q, t, 'x') + Math.cos(th) * lat, lerp(p, q, t, 'y') + yOff, lerp(p, q, t, 'z') + Math.sin(th) * lat);
+    },
+    headingAt(a) { const [p, q, t] = at(a); return lerp(p, q, t, 'th'); },
+    yAt(a) { const [p, q, t] = at(a); return lerp(p, q, t, 'y'); },
+    groundAt(a) { const [p, q, t] = at(a); return lerp(p, q, t, 'y'); }
+  };
+}
+
+// Straight line in the frame facing away from GTL, from a0 to a1, lateral latFn(a).
+export function lineFromTo(P0, H0, a0, a1, latFn, step = 4) {
+  const F = { x: Math.sin(H0), z: -Math.cos(H0) }, R = { x: Math.cos(H0), z: Math.sin(H0) };
+  const pts = [];
+  for (let a = a0; a <= a1; a += step) {
+    const b = latFn(a), db = latFn(a + 0.5) - latFn(a - 0.5);
+    pts.push({ x: P0.x + F.x * a + R.x * b, z: P0.z + F.z * a + R.z * b, th: H0 + Math.atan(db), y: 0, a });
+  }
+  return pts;
+}
+
+// Lateral positions (frame facing away from GTL, + = right) of every line at frame distance a:
+// Guntakal's own tracks (still in the throat, or continuing at their running-line offsets) plus side lines.
+function linesAt(layout, gtl, P0, H0, a, lines) {
+  const R = { x: Math.cos(H0), z: Math.sin(H0) }, F = { x: Math.sin(H0), z: -Math.cos(H0) };
+  const s = gtl.uToS(a), lats = [];
+  for (const t of gtl.station.layout.tracks) lats.push(gtl.dir * t.lane.at(s));
+  for (const line of lines) {
+    if (line[0].a > a + 2 || line[line.length - 1].a < a - 2) continue;
+    let best = null;
+    for (const p of line) { const al = (p.x - P0.x) * F.x + (p.z - P0.z) * F.z; if (!best || Math.abs(al - a) < Math.abs(best.al - a)) best = { al, p }; }
+    lats.push((best.p.x - P0.x) * R.x + (best.p.z - P0.z) * R.z);
+  }
+  lats.sort((p, q) => p - q);
+  return lats.filter((l, i) => i === 0 || l - lats[i - 1] > 1.2);
+}
+
+// The road-over-rail bridge at robD from the platform ends, spanning whatever lines are there.
+function buildGtlROB(group, layout, gtl, P0, H0, lines, seedKey) {
+  const a = gtl.uOfD(GTL_SPECIAL.robD);
+  const lats = linesAt(layout, gtl, P0, H0, a, lines);
+  const piers = [];
+  for (let i = 0; i + 1 < lats.length; i++) if (lats[i + 1] - lats[i] > 5.8) piers.push((lats[i] + lats[i + 1]) / 2);
+  return buildROB(group, P0, H0, a, { piers, abutL: lats[0] - 9.5, abutR: lats[lats.length - 1] + 6.5, seedKey });
+}
+
+// Two-storey railway buildings at both ends of the junction FOB, beyond the stair feet.
+function buildFobEndBuildings(group, ends, index, rand, rob = null) {
+  const bat = new Batcher();
+  const cream = M.house('#f4ead2', 2, false), maroon = M.plaster(0x8c3a26), trim = M.plaster(0xfaf5e8);
+  const names = [
+    ['DIVISIONAL OFFICE ANNEXE', 'मंडल कार्यालय उपभवन'],
+    ['RAILWAY INSTITUTE & CANTEEN', 'रेलवे संस्थान एवं कैंटीन']
+  ];
+  ends.forEach((e, i) => {
+    // walk outward from the stair foot until the site is clear of every track
+    let d = 6;
+    const blocked = (dd) => {
+      for (const k of [2, 9, 16]) for (const w of [-11, 0, 11]) {
+        const x = e.x + e.ux * (dd + k) - e.uz * w, z = e.z + e.uz * (dd + k) + e.ux * w;
+        if (index.distance(x, z, 40) < 14 || (rob && rob.contains(x, z, 10))) return true;
+      }
+      return false;
+    };
+    while (d < 90 && blocked(d)) d += 3;
+    if (d >= 90) return; // no clear plot at this end
+    const depth = 16, front = 22, fh = 3.6;
+    const cx = e.x + e.ux * (d + depth / 2), cz = e.z + e.uz * (d + depth / 2), y = e.y;
+    const ry = Math.atan2(-e.uz, e.ux);
+    for (let f = 0; f < 2; f++) {
+      bat.box(cream, cx, y + 0.4 + fh / 2 + f * fh, cz, depth, fh, front, ry);
+      bat.box(maroon, cx, y + 0.4 + (f + 1) * fh - 0.1, cz, depth + 0.3, 0.25, front + 0.3, ry, false);
+    }
+    bat.box(M.concrete(), cx, y + 0.2, cz, depth + 2, 0.4, front + 2, ry, false);
+    bat.box(maroon, cx, y + 0.4 + 2 * fh + 0.45, cz, depth, 0.9, front, ry, true); // parapet
+    // entrance porch facing the FOB, and the name board above it
+    const fx = cx - e.ux * (depth / 2 + 1.6), fz = cz - e.uz * (depth / 2 + 1.6);
+    for (const o of [-3, 3]) bat.box(trim, fx - e.uz * o, y + 1.6, fz + e.ux * o, 0.5, 3.2, 0.5, ry);
+    bat.box(trim, fx, y + 3.3, fz, 3.4, 0.3, 7.4, ry, true);
+    const [en, hi] = names[i % names.length];
+    bat.box(M.textBoard(`${hi}\n${en}`, { bg: '#0b3d91', fg: '#ffffff', w: 1024, h: 192, font: 'bold 52px Arial' }),
+      cx - e.ux * (depth / 2 + 0.06), y + 2 * fh - 0.6, cz - e.uz * (depth / 2 + 0.06), 0.1, 1.3, front * 0.8, ry, false);
+    // a few cycles and a scooter parked outside
+    for (let k = 0; k < 4; k++) bat.box(M.steelDark(), fx - e.ux * 3 + e.uz * (5 + k * 1.1), y + 0.5, fz - e.uz * 3 - e.ux * (5 + k * 1.1), 1.7, 0.9, 0.08, ry + Math.PI / 2, false);
+    if (rand() < 0.8) bat.box(M.plaster(0xc0392b), fx - e.ux * 3 - e.uz * 6, y + 0.6, fz - e.uz * 3 + e.ux * 6, 1.8, 1.1, 0.7, ry + Math.PI / 2, true);
+  });
+  group.add(bat.build());
+}
+
+// ------------------------------------------------------------- Gooty route
+// Guntakal east throat when the route runs GTL <-> Gooty: the same junction seen
+// from the Gooty line. We run straight on the Gooty double line. 200 m past the
+// platform ends (the compact throat) the Dhone single line leaves the left-hand
+// main and a goods line the right-hand one, so the road-over-rail bridge at 300 m
+// spans four lines, as on the Dhone route. At 450 m the Dhone line curves away
+// left, with the junction FOB and the DRM office there, and VV Nagar beyond.
+export function buildGtlGootyJunction(layout, { seedKey, terrainFlat }) {
+  const gtl = layout.gtl, path = layout.path;
+  const S = GTL_SPECIAL;
+  const P0 = path.pointAt(gtl.boundary, 0, new THREE.Vector3());
+  const H0 = path.headingAt(gtl.boundary) + (gtl.dir > 0 ? 0 : Math.PI); // facing away from GTL
+  const group = new THREE.Group();
+  const index = new PolylineIndex(80);     // side lines (terrain, scenery, mast avoidance)
+  const siteIndex = new PolylineIndex(80); // side lines + our own mains (building sites, FOB columns)
+  const noBellary = new PolylineIndex(40);
+  const sm = (a, a0, a1) => smoothstep(a0, a1, a);
+  const d = (a) => a + gtl.throat;          // frame distance -> distance from the platform end
+  const a0 = 0;                             // the side lines continue Guntakal's own tracks from the throat edge
+  const rand = makeRng(seedKey, 'gtl-gooty');
+
+  // Dhone centre-line (frame facing away from GTL, +lat = right): 6 m outside the left main
+  const DL = -(H + 6.0);
+  const total = S.length + 1600, step = 2;
+  const c0 = gtl.uOfD(S.divergeD), c1 = c0 + S.curveLen;
+  const latOf = () => DL;
+  const F = { x: Math.sin(H0), z: -Math.cos(H0) }, Rt = { x: Math.cos(H0), z: Math.sin(H0) };
+  const kAt = (a) => (a < c0 || a > c1 ? 0 : (-1 / S.radius) * Math.min(1, (a - c0) / S.ramp, (c1 - a) / S.ramp));
+  const y0 = path.yAt(gtl.boundary);
+  const pts = [];
+  let x = 0, z = 0, th = H0;
+  for (let a = a0; a <= total; a += step) {
+    if (a <= c0) {
+      const l = latOf(a), dl = latOf(a + 0.5) - latOf(a - 0.5);
+      x = P0.x + F.x * a + Rt.x * l; z = P0.z + F.z * a + Rt.z * l; th = H0 + Math.atan(dl);
+    } else {
+      const k = kAt(a - step / 2), tm = th + (k * step) / 2;
+      x += Math.sin(tm) * step; z -= Math.cos(tm) * step; th += k * step;
+    }
+    const n = path.nearest(x, z);
+    const g = n.dist < 4000 ? path.groundAt(n.s) : y0;
+    const k = sm(d(a), 700, 1300); // station level near Guntakal, easing to the ground further out
+    pts.push({ x, z, th, y: y0 * (1 - k) + g * k, a });
+  }
+  const dPath = sidePath(pts);
+  const frame = { uToS: (u) => u, sToU: (a) => a, dir: 1, throat: gtl.throat, uOfD: (dd) => dd - gtl.throat };
+  const side = { gtl: frame, path: dPath };
+
+  // goods line: leaves the right-hand main beside the Dhone line and rejoins it further out
+  const GX = H + 5.3;
+  const goodsLine = lineFromTo(P0, H0, a0, gtl.uOfD(940), (a) => GX - (GX - H) * sm(d(a), 740, 930)); // merges into Gooty Up
+  // crossover ladder joining the four lines (as on the Dhone route)
+  const ladder = GTL_GOOTY_LADDER.map(([l0, l1, p, q]) => lineFromTo(P0, H0, l0, l1, (a) => p + (q - p) * sm(a, l0, l1), 2));
+  // our own Gooty mains through the junction (straight here), for siting only
+  const mains = [-H, H].map((l) => lineFromTo(P0, H0, a0, S.length, () => l));
+  for (const l of [pts, goodsLine, ...ladder]) { index.add(l, 2); siteIndex.add(l, 2); }
+  for (const m of mains) siteIndex.add(m, 2);
+
+  // --- road-over-rail bridge at 300 m: Dhone line, both Gooty mains and the goods line
+  const rob = buildGtlROB(group, layout, gtl, P0, H0, [pts, goodsLine, ...ladder], seedKey);
+
+  // --- Dhone and goods lines: rails, sleepers, ballast and OHE
+  const tb = new TrackChunkBuilder();
+  tb.addTrack(polylineFrames(pts));
+  tb.addTrack(polylineFrames(goodsLine));
+  for (const l of ladder) tb.addTrack(polylineFrames(l));
+  tb.build(group);
+  buildSideOHE(group, [pts, goodsLine], new THREE.Vector3(1e9, 0, 1e9), (px, pz) => rob.nearMast(px, pz) && rob.contains(px, pz));
+  const atp = buildAtpDirect(group, layout, gtl, P0, H0, index, (px, pz) => rob.contains(px, pz, 4));
+  if (atp) for (const l of atp) siteIndex.add(l, 2);
+
+  // --- junction FOB across the Dhone line and the Gooty lines, with buildings at both ends
+  const ends = buildJunctionFOB(group, dPath, frame, [mains[0], goodsLine], siteIndex);
+  if (ends) buildFobEndBuildings(group, ends, siteIndex, rand, rob);
+
+  // --- boards at the divergence
+  const bat = new Batcher();
+  const boardAt = (a, lat, text) => {
+    const bx = P0.x + F.x * a + Rt.x * lat, bz = P0.z + F.z * a + Rt.z * lat;
+    const mat = M.textBoard(text, { bg: '#f5c518', fg: '#111', w: 768, h: 192, font: 'bold 64px Arial' });
+    bat.box(mat, bx, 3.2, bz, 5.2, 1.3, 0.12, -H0 + (gtl.dir > 0 ? 0 : Math.PI), true);
+    for (const o of [-2.2, 2.2]) bat.box(M.steelDark(), bx + Rt.x * o, 1.3, bz + Rt.z * o, 0.12, 2.6, 0.12, 0, false);
+  };
+  boardAt(gtl.uOfD(360), GX + 7, 'GOOTY / BENGALURU  ➜');
+  boardAt(gtl.uOfD(380), DL - 8.5, '⬉  DHONE / KURNOOL');
+  group.add(bat.build());
+
+  // --- VV Nagar colony (right of the Dhone line) and the DRM office (left of it)
+  const vv = buildVVNagar(side, seedKey, noBellary);
+  group.add(vv.group);
+  group.add(vv.far);
+  if (terrainFlat) terrainFlat.push(...vv.flat);
+  const drm = buildDRMOffice(side, seedKey, siteIndex, noBellary);
+  if (drm) { group.add(drm.group); if (terrainFlat) terrainFlat.push(drm.flat); }
+
+  const exclusion = (ex, ez) => index.distance(ex, ez, 60) < 16 || vv.inside(ex, ez) || rob.contains(ex, ez, 6) || (drm && drm.inside(ex, ez));
+  const skipMast = (s, lat) => {
+    const p = path.pointAt(s, lat, new THREE.Vector3());
+    return index.distance(p.x, p.z, 40) < 3.5 || (rob.nearMast(p.x, p.z) && rob.contains(p.x, p.z));
+  };
+  return {
+    group, index, exclusion, skipPier: () => false, skipMast, crossU: -1, aCurve: 0, bridgeA: -1e9, bridgeB: -1e9,
+    lcS: vv.roadS, sidePath: dPath, animate: (dt) => { vv.animate(dt); rob.animate?.(dt); }, drm: !!drm, vvSide: gtl.dir > 0 ? 'LEFT' : 'RIGHT', gooty: true, solved: true
+  };
 }

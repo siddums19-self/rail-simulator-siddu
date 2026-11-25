@@ -1,3 +1,7 @@
+import { planAirport, buildAirport } from './airport.js';
+import { planSecunderabad, buildSecunderabad } from './secunderabad.js';
+import { PolylineIndex } from './terrain.js';
+import { buildCityRows } from './cityRows.js';
 import * as THREE from 'three/webgpu';
 import { STREAM, TRACK } from '../config.js';
 import { Lane } from '../route/lane.js';
@@ -8,7 +12,9 @@ import { makeRng, smoothstep } from '../core/rng.js';
 import { Terrain } from './terrain.js';
 import { PropBuilder } from './props.js';
 import { buildStation } from './station.js';
-import { buildGtlJunction } from './gtlJunction.js';
+import { buildGtlJunction, buildGtlGootyJunction } from './gtlJunction.js';
+import { buildGtlWest } from './gtlWest.js';
+import { Water } from './water.js';
 import { SignalMast } from './signals.js';
 import { animatePerson } from './people.js';
 import { TurnoutManager } from './turnouts.js';
@@ -32,20 +38,50 @@ export class World {
     this.stationLights = [];
 
     const flat = [];
-    this.gtl = layout.gtl ? buildGtlJunction(layout, { seedKey, terrainFlat: flat }) : null;
+    this.gtl = layout.gtl ? (layout.gtl.gooty ? buildGtlGootyJunction : buildGtlJunction)(layout, { seedKey, terrainFlat: flat }) : null;
     if (this.gtl) this.root.add(this.gtl.group);
-    this.terrain = new Terrain(this.root, layout, this.gtl ? this.gtl.index : null, flat);
+    this.gtlW = layout.gtlWest ? buildGtlWest(layout, { seedKey }) : null;
+    if (this.gtlW) this.root.add(this.gtlW.group);
+    let extra = this.gtl ? this.gtl.index : null;
+    if (this.gtlW) { if (extra) for (const l of this.gtlW.lines) extra.add(l, 2); else extra = this.gtlW.index; }
+    // Hyderabad airport beside the MMTS line (Fatehnagar -> Lingampalli): levelled ground, kept clear of props
+    this.airportPlan = planAirport(layout);
+    if (this.airportPlan) flat.push({ x: this.airportPlan.x, z: this.airportPlan.z, r: 820 });
+    this.terrain = new Terrain(this.root, layout, extra, flat);
+    if (this.airportPlan) this.root.add(buildAirport(layout, this.airportPlan, this.terrain));
+    // rivers, tanks and the sea
+    this.water = new Water(layout, seedKey);
+    this.water.plan(this.terrain);
+    // Secunderabad (east side): Olifanta road cutting under the railway, Hyderabad Metro viaduct over it
+    this.scPlan = planSecunderabad(layout);
+    if (this.scPlan) {
+      this.water.cuts = [this.scPlan.cut];
+      this.scIndex = new PolylineIndex(80);
+      for (const l of this.scPlan.sideLines) { this.scIndex.add(l, 2); this.terrain.extra.add(l, 2); } // flatten under the other line
+    }
+    this.terrain.water = this.water;
+    this.water.build(this.root);
     this.props = new PropBuilder({
       layout, terrain: this.terrain, seedKey, density,
-      exclusion: this.gtl ? this.gtl.exclusion : null,
+      exclusion: (x, z) => !!((this.scIndex && this.scIndex.distance(x, z, 60) < 16) || (this.airportPlan && Math.hypot(x - this.airportPlan.x, z - this.airportPlan.z) < 880) || (this.gtl && this.gtl.exclusion(x, z)) || (this.gtlW && this.gtlW.exclusion(x, z)) || this.water.contains(x, z)),
       rotors: this.rotors,
-      lcs: []
+      lcs: [],
+      traffic: []
     });
     this.lcs = this.props.ctx.lcs;
+    if (this.scPlan) buildSecunderabad(layout, this.scPlan, this.terrain, this.root, this.props.ctx.traffic);
+    // city: rows of buildings along the line through city limits (kept clear of water, airport, cuttings, side lines)
+    const cut = this.scPlan?.cut;
+    buildCityRows(layout, this.terrain, (x, z) => this.props.ctx.exclusion(x, z) || (cut && Math.abs((x - cut.x) * cut.F.x + (z - cut.z) * cut.F.z) < 30 && Math.abs((x - cut.x) * cut.R.x + (z - cut.z) * cut.R.z) < cut.len + 20), seedKey, this.root);
     if (this.gtl && this.gtl.lcS) { // manned level crossing on the VV Nagar road
       const bat = new Batcher();
       this.props._frameNotes ||= [];
-      this.props._levelCrossing(this.gtl.group, bat, this.gtl.lcS, () => 0.5, { manned: true, halfLen: 140 });
+      if (this.gtl.sidePath) { // the crossing is on the Dhone branch, not on our line: build it in that line's frame
+        const ctx = this.props.ctx, terrain = ctx.terrain;
+        const sideCtx = { ...ctx, layout: { ...layout, path: this.gtl.sidePath, lineAt: () => 'S' }, lcs: [],
+          terrain: { heightSL: (s, l, x, z) => terrain.heightAt(x, z), heightAt: (x, z) => terrain.heightAt(x, z) } };
+        this.props._levelCrossing.call(Object.assign(Object.create(this.props), { ctx: sideCtx }), this.gtl.group, bat, this.gtl.lcS, () => 0.5, { manned: true, halfLen: 140 });
+      } else this.props._levelCrossing(this.gtl.group, bat, this.gtl.lcS, () => 0.5, { manned: true, halfLen: 140 });
       this.gtl.group.add(bat.build());
     }
     this._buildRouteEnds();
@@ -89,11 +125,19 @@ export class World {
     const L = this.layout;
     const bat = new Batcher();
     const first = L.stations[0].layout, last = L.stations[L.stations.length - 1].layout;
-    for (const t of first.tracks) if (t.fanEntry === 0) buildBufferStop(bat, L.path, first.zoneStart - 380, t.o, -1);
-    const lines = first.entryLine === 'D' ? [-TRACK.MAIN_HALF, TRACK.MAIN_HALF] : [0];
-    for (const o of lines) buildBufferStop(bat, L.path, 30, o, -1);
-    const endLines = last.exitLine === 'D' ? [-TRACK.MAIN_HALF, TRACK.MAIN_HALF] : [0];
-    for (const o of endLines) buildBufferStop(bat, L.path, L.total - 30, o, 1);
+    if (L.stations[0].terminal) { // terminus: every platform line ends at its own buffer stop
+      for (const t of first.tracks) buildBufferStop(bat, L.path, L.trackMin + 1, t.lane.at(L.trackMin + 1), -1);
+    } else {
+      for (const t of first.tracks) if (t.fanEntry === 0) buildBufferStop(bat, L.path, first.zoneStart - 380, t.o, -1);
+      const lines = first.entryLine === 'D' ? [-TRACK.MAIN_HALF, TRACK.MAIN_HALF] : [0];
+      for (const o of lines) buildBufferStop(bat, L.path, 30, o, -1);
+    }
+    if (L.stations[L.stations.length - 1].terminal) {
+      for (const t of last.tracks) buildBufferStop(bat, L.path, L.trackMax - 1, t.lane.at(L.trackMax - 1), 1);
+    } else {
+      const endLines = last.exitLine === 'D' ? [-TRACK.MAIN_HALF, TRACK.MAIN_HALF] : [0];
+      for (const o of endLines) buildBufferStop(bat, L.path, L.total - 30, o, 1);
+    }
     this.root.add(bat.build());
   }
 
@@ -102,7 +146,7 @@ export class World {
     const L = this.layout;
     const segs = [];
     const push = (lane, s0, s1) => {
-      const x0 = Math.max(a, s0), x1 = Math.min(b, s1);
+      const x0 = Math.max(a, s0, L.trackMin ?? 0), x1 = Math.min(b, s1, L.trackMax ?? L.total);
       if (x1 - x0 > 0.5) segs.push({ lane, s0: x0, s1: x1 });
     };
     const mains = (line) => (line === 'D' ? [-TRACK.MAIN_HALF, TRACK.MAIN_HALF] : [0]);
@@ -119,6 +163,7 @@ export class World {
       for (const t of S.tracks) push(t.lane, t.spanStart, t.spanEnd);
       // main-line stubs where no platform track sits exactly on a running line
       for (const [line, from, to, key] of [[S.entryLine, S.zoneStart, null, 'mEntry'], [S.exitLine, null, S.zoneEnd, 'mExit']]) {
+        if (key === 'mEntry' ? S.gtlLadderEntry : S.gtlLadderExit) continue; // Guntakal: its own lines run to the throat edge
         for (const m of mains(line)) {
           if (S.tracks.some((t) => Math.abs(t.o - m) < 0.01)) continue;
           const feeders = S.tracks.filter((t) => Math.abs(t[key] - m) < 0.01);
@@ -144,9 +189,11 @@ export class World {
     }
     tb.build(group);
     const gtl = this.gtl;
-    const inGtl = (s) => this.layout.gtl && s > this.layout.gtl.s0 - 50 && s < this.layout.gtl.s1 + 50;
-    buildOHE(group, this.layout.path, this.layout, a, b, segs, { skipMast: gtl ? gtl.skipMast : null });
-    buildFormation(group, this.layout.path, this.layout, a, b, {
+    const inGtl = (s) => this.layout.gtl && !this.layout.gtl.gooty && s > this.layout.gtl.s0 - 50 && s < this.layout.gtl.s1 + 50;
+    // beyond a terminus' buffer stops there is no railway at all
+    const ra = Math.max(a, this.layout.trackMin ?? 0), rb = Math.min(b, this.layout.trackMax ?? this.layout.total);
+    if (rb > ra) buildOHE(group, this.layout.path, this.layout, ra, rb, segs, { skipMast: gtl ? gtl.skipMast : null });
+    if (rb > ra) buildFormation(group, this.layout.path, this.layout, ra, rb, {
       skipPier: gtl ? gtl.skipPier : null, walled: inGtl,
       // Guntakal flyover: a walled (retaining-wall) embankment, with a bridge only over the Bellary line
       deckMinH: (s) => (inGtl(s) ? (gtl && s > gtl.bridgeA && s < gtl.bridgeB ? 1.0 : 99) : 3.6),
@@ -213,6 +260,7 @@ export class World {
   _buildStationObj(st) {
     const L = this.layout;
     const res = buildStation(st, L, { seedKey: this.seedKey, density: this.density, people: [] });
+    if (res.traffic?.length) this.props.ctx.traffic.push(...res.traffic);
     const S = st.layout;
     const path = L.path;
     // signals
@@ -258,7 +306,7 @@ export class World {
     this.lastBuild = '';
     const L = this.layout;
     const C = STREAM.CHUNK;
-    const i0 = Math.max(0, Math.floor((sFocus - STREAM.BEHIND) / C));
+    const i0 = Math.max(0, Math.floor((sFocus - Math.max(STREAM.BEHIND, this.behind || 0)) / C)); // behind: long trains keep their track
     const i1 = Math.min(Math.floor(L.total / C), Math.floor((sFocus + STREAM.AHEAD) / C));
     const want = new Set();
     for (let i = i0; i <= i1; i++) want.add(i);
@@ -317,10 +365,10 @@ export class World {
     let bell = null;
     for (const lc of this.lcs) {
       const closing = sFront > lc.s - 900 && sFront - trainLen < lc.s + 25;
-      const target = closing ? 1 : 0;
+      const target = closing && !lc.stuckOpen ? 1 : 0; // stuckOpen: the gateman has not closed the gate (incident)
       lc.closed += Math.sign(target - lc.closed) * Math.min(Math.abs(target - lc.closed), dt / 5);
       for (const p of lc.pivots) p.pivot.rotation.x = p.open * (1 - lc.closed);
-      if (closing && lc.closed < 1 && Math.abs(lc.s - sFront) < 900) bell = lc;
+      if (closing && !lc.stuckOpen && lc.closed < 1 && Math.abs(lc.s - sFront) < 900) bell = lc;
     }
     return bell;
   }
@@ -331,6 +379,15 @@ export class World {
       if (p.mesh.parent && p.mesh.getWorldPosition(_tmp).distanceToSquared(focusPos) < 450 * 450) animatePerson(p, dt);
     }
     for (const r of this.rotors) r.obj.rotation.z += dt * r.speed;
+    // road traffic (level crossings, station streets) near the camera
+    const all = this.props.ctx.traffic;
+    for (let i = all.length - 1; i >= 0; i--) {
+      const t = all[i];
+      if (!t.group.parent || !t.group.parent.parent) { if (!t.group.parent) all.splice(i, 1); continue; }
+      t.group.getWorldPosition(_tmp);
+      const c = t.center, dx = (c.x + _tmp.x) - focusPos.x, dz = (c.z + _tmp.z) - focusPos.z;
+      if (dx * dx + dz * dz < 1500 * 1500) t.update(dt);
+    }
     // Fixed light pool: adding/removing lights recompiles every shader in WebGPU,
     // so a constant number of lights is moved to the nearest station floodlights.
     const pts = this.stationLights.slice().sort((a, b) => a.distanceToSquared(focusPos) - b.distanceToSquared(focusPos));

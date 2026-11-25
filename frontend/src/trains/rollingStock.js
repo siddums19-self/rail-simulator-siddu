@@ -105,15 +105,26 @@ function doors(ctx, W, h, L, col, positionsM, width = 0.95) {
   }
 }
 
+// livery variants painted on an existing coach shell
+const COACH_BASE = { RAJ: 'LHB', DUR: 'LHB', GR: 'LHB', VBO: 'VB', ICFC: 'ICF', ICFG: 'ICF', EMU: 'DEMU', MMTS: 'DEMU' };
+
 const LIVERY = {
   LHB: { body: '#b3252b', roof: '#5b6168', L: 23.54 },
   ICF: { body: '#1f4f96', roof: '#4a5058', L: 21.34 },
   RAJ: { body: '#8e1b24', roof: '#5b6168', L: 23.54 },
   DUR: { body: '#f2c230', roof: '#5b6168', L: 23.54 },
   VB: { body: '#f2f4f5', roof: '#d7dbde', L: 23.0 },
+  // more liveries on the same coach shells
+  VBO: { body: '#ff7a1a', roof: '#d7dbde', L: 23.0, panel: '#3b4148', stripe: '#ffffff', text: '#ffffff' }, // saffron Vande Bharat
+  GR: { body: '#1f7a3a', roof: '#5b6168', L: 23.54, band: '#f2c230', title: 'GARIB RATH' },                 // Garib Rath (all AC 3-tier)
+  ICFC: { body: '#efe3c2', roof: '#4a5058', L: 21.34, band: '#7a2e1f', text: '#7a2e1f', door: '#d9cba3' },  // cream heritage coaches
+  ICFG: { body: '#6abf3a', roof: '#4a5058', L: 21.34, band: '#f6f0d6', text: '#ffffff', door: '#4f9a2a' },  // parrot green (Jan Shatabdi)
   DEMU: { body: '#2a5d9f', roof: '#59606a', L: 21.34 },
+  EMU: { body: '#c2318f', roof: '#c9ccd0', L: 21.34, band: '#f4f1ea', title: 'W R', door: '#a8237a' },   // Mumbai local: cream over magenta (WR)
+  MMTS: { body: '#3c8fd4', roof: '#c9ccd0', L: 21.34, band: '#f6f6f2', title: 'MMTS', door: '#2c73b5' },   // Hyderabad MMTS: white over blue
   WAP7: { body: '#eef0ee', roof: '#4b5563', L: 20.6 },
   WAG12: { body: '#b42a22', roof: '#4b5563', L: 17.5 },
+  WAG9: { body: '#7a1f1a', roof: '#4b5563', L: 20.56 },
   WDP4D: { body: '#284c8a', roof: '#5b6168', L: 19.6 }
 };
 
@@ -126,17 +137,26 @@ function liveryMaterial(kind, code, profile) {
     const vRoof1 = vv[profile.length - 1 - sideTopIdx];
     const lv = LIVERY[kind];
     const L = lv.L;
+    const base = COACH_BASE[kind] || kind;
+    // AC coaches (A first AC, B 3-tier, H first, M economy, C/E chair car, G Garib Rath): sealed windows;
+    // non-AC (S sleeper, GS general, D second sitting): windows with bars
+    const ac = /^(A|B|H|M|C|E|G)\d/.test(code);
+    const bars = (ctx, W, h, y0, y1) => { if (ac) return; ctx.fillStyle = 'rgba(210,214,218,0.85)'; for (let x = 0; x < W; x += 9) ctx.fillRect(x, y0 * h, 2, (y1 - y0) * h); };
+    const acTag = (ctx, W, h, y, col = '#fff') => { if (!ac) return; ctx.fillStyle = col; ctx.font = 'bold 26px Arial'; ctx.textAlign = 'center'; ctx.fillText('AC', W * 0.25, y * h); ctx.fillText('AC', W * 0.75, y * h); };
     let side, emissiveSide, roughSide;
     const rough = (fn) => (ctx, W, h) => { ctx.fillStyle = '#6e6e6e'; ctx.fillRect(0, 0, W, h); ctx.fillStyle = '#121212'; fn(ctx, W, h); };
-    if (kind === 'LHB') {
+    if (base === 'LHB') {
       side = (ctx, W, h) => {
         ctx.fillStyle = lv.body; ctx.fillRect(0, 0, W, h);
-        ctx.fillStyle = '#f1e7cf'; ctx.fillRect(0, 0.6 * h, W, 0.022 * h); ctx.fillRect(0, 0.65 * h, W, 0.022 * h);
+        ctx.fillStyle = lv.band || '#f1e7cf'; ctx.fillRect(0, 0.6 * h, W, 0.022 * h); ctx.fillRect(0, 0.65 * h, W, 0.022 * h);
+        if (kind === 'GR') { ctx.fillRect(0, 0.13 * h, W, 0.03 * h); }
         ctx.fillStyle = '#7a7f86'; ctx.fillRect(0, 0.86 * h, W, 0.14 * h);
         windowsRow(ctx, W, h, L, { y0: 0.2, y1: 0.5, pitch: 2.15, width: 1.3, startM: 3.4, endM: 3.4 });
-        doors(ctx, W, h, L, '#9c1f24', [1.2, L - 2.15]);
+        bars(ctx, W, h, 0.2, 0.5);
+        doors(ctx, W, h, L, kind === 'GR' ? '#16602d' : '#9c1f24', [1.2, L - 2.15]);
         ctx.fillStyle = '#fff'; ctx.font = 'bold 30px Arial'; ctx.textAlign = 'center';
-        ctx.fillText('INDIAN RAILWAYS', W / 2, 0.76 * h);
+        ctx.fillText(lv.title || 'INDIAN RAILWAYS', W / 2, 0.76 * h);
+        acTag(ctx, W, h, 0.585, lv.band || '#f1e7cf');
         ctx.font = 'bold 44px Arial'; ctx.fillText(code, W * 0.12, 0.76 * h); ctx.fillText(code, W * 0.88, 0.76 * h);
       };
       emissiveSide = (ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.2, y1: 0.5, pitch: 2.15, width: 1.3, startM: 3.4, endM: 3.4, emissive: true });
@@ -164,43 +184,43 @@ function liveryMaterial(kind, code, profile) {
       };
       emissiveSide = (ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.2, y1: 0.5, pitch: 2.15, width: 1.3, startM: 3.4, endM: 3.4, emissive: true });
       roughSide = rough((ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.2, y1: 0.5, pitch: 2.15, width: 1.3, startM: 3.4, endM: 3.4, glass: false, frame: null }));
-    } else if (kind === 'ICF') {
+    } else if (base === 'ICF') {
       side = (ctx, W, h) => {
         ctx.fillStyle = lv.body; ctx.fillRect(0, 0, W, h);
-        ctx.fillStyle = '#e8e2cc'; ctx.fillRect(0, 0.56 * h, W, 0.03 * h);
+        ctx.fillStyle = lv.band || '#e8e2cc'; ctx.fillRect(0, 0.56 * h, W, 0.03 * h);
+        if (kind === 'ICFC') ctx.fillRect(0, 0.12 * h, W, 0.025 * h);
         windowsRow(ctx, W, h, L, { y0: 0.18, y1: 0.48, pitch: 1.62, width: 1.1, startM: 2.8, endM: 2.8, frame: '#b9bec4' });
-        // window bars
-        ctx.fillStyle = 'rgba(210,214,218,0.85)';
-        for (let x = 0; x < W; x += 9) ctx.fillRect(x, 0.18 * h, 2, 0.3 * h);
-        doors(ctx, W, h, L, '#1a4382', [0.9, L - 1.85]);
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 28px Arial'; ctx.textAlign = 'center';
-        ctx.fillText('INDIAN RAILWAYS', W / 2, 0.72 * h);
+        bars(ctx, W, h, 0.18, 0.48);
+        doors(ctx, W, h, L, lv.door || '#1a4382', [0.9, L - 1.85]);
+        ctx.fillStyle = lv.text || '#fff'; ctx.font = 'bold 28px Arial'; ctx.textAlign = 'center';
+        ctx.fillText(kind === 'ICFG' ? 'JAN SHATABDI EXPRESS' : 'INDIAN RAILWAYS', W / 2, 0.72 * h);
+        acTag(ctx, W, h, 0.62, lv.text || '#fff');
         ctx.font = 'bold 42px Arial'; ctx.fillText(code, W * 0.13, 0.72 * h);
       };
       emissiveSide = (ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.18, y1: 0.48, pitch: 1.62, width: 1.1, startM: 2.8, endM: 2.8, emissive: true });
       roughSide = rough((ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.18, y1: 0.48, pitch: 1.62, width: 1.1, startM: 2.8, endM: 2.8, glass: false, frame: null }));
-    } else if (kind === 'VB') {
+    } else if (base === 'VB') {
       side = (ctx, W, h) => {
         ctx.fillStyle = lv.body; ctx.fillRect(0, 0, W, h);
-        ctx.fillStyle = '#1d3f8f'; ctx.fillRect(0, 0.17 * h, W, 0.36 * h);
-        ctx.fillStyle = '#ff7a1a'; ctx.fillRect(0, 0.56 * h, W, 0.03 * h);
-        ctx.fillStyle = '#1d3f8f'; ctx.fillRect(0, 0.62 * h, W, 0.018 * h);
+        ctx.fillStyle = lv.panel || '#1d3f8f'; ctx.fillRect(0, 0.17 * h, W, 0.36 * h);
+        ctx.fillStyle = lv.stripe || '#ff7a1a'; ctx.fillRect(0, 0.56 * h, W, 0.03 * h);
+        ctx.fillStyle = lv.panel || '#1d3f8f'; ctx.fillRect(0, 0.62 * h, W, 0.018 * h);
         ctx.fillStyle = '#9aa2a8'; ctx.fillRect(0, 0.84 * h, W, 0.16 * h);
         windowsRow(ctx, W, h, L, { y0: 0.21, y1: 0.48, pitch: 2.25, width: 1.55, startM: 3.0, endM: 3.0, frame: null });
-        doors(ctx, W, h, L, '#d9dde0', [1.0, L - 2.0]);
-        ctx.fillStyle = '#1d3f8f'; ctx.font = 'bold 30px Arial'; ctx.textAlign = 'center';
+        doors(ctx, W, h, L, kind === 'VBO' ? '#e06a12' : '#d9dde0', [1.0, L - 2.0]);
+        ctx.fillStyle = lv.text || '#1d3f8f'; ctx.font = 'bold 30px Arial'; ctx.textAlign = 'center';
         ctx.fillText('VANDE BHARAT', W / 2, 0.75 * h);
       };
       emissiveSide = (ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.21, y1: 0.48, pitch: 2.25, width: 1.55, startM: 3.0, endM: 3.0, emissive: true });
       roughSide = rough((ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.17, y1: 0.53, pitch: 0.5, width: 0.5, startM: 0, endM: 0, glass: false, frame: null }));
-    } else if (kind === 'DEMU') {
+    } else if (base === 'DEMU') {
       side = (ctx, W, h) => {
         ctx.fillStyle = lv.body; ctx.fillRect(0, 0, W, h);
-        ctx.fillStyle = '#f0e9d2'; ctx.fillRect(0, 0.12 * h, W, 0.44 * h);
+        ctx.fillStyle = lv.band || '#f0e9d2'; ctx.fillRect(0, 0.12 * h, W, 0.44 * h);
         windowsRow(ctx, W, h, L, { y0: 0.2, y1: 0.48, pitch: 1.55, width: 1.0, startM: 3.6, endM: 3.6, frame: '#a0a8b0' });
-        doors(ctx, W, h, L, '#24548f', [2.3, L / 2 - 0.65, L - 3.3], 1.3);
+        doors(ctx, W, h, L, lv.door || '#24548f', [2.3, L / 2 - 0.65, L - 3.3], 1.3);
         ctx.fillStyle = '#fff'; ctx.font = 'bold 26px Arial'; ctx.textAlign = 'center';
-        ctx.fillText('SOUTH CENTRAL RAILWAY  DEMU', W / 2, 0.74 * h);
+        ctx.fillText(lv.title || 'SOUTH CENTRAL RAILWAY  DEMU', W / 2, 0.74 * h);
       };
       emissiveSide = (ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.2, y1: 0.48, pitch: 1.55, width: 1.0, startM: 3.6, endM: 3.6, emissive: true });
       roughSide = rough((ctx, W, h) => windowsRow(ctx, W, h, L, { y0: 0.2, y1: 0.48, pitch: 1.55, width: 1.0, startM: 3.6, endM: 3.6, glass: false, frame: null }));
@@ -212,6 +232,9 @@ function liveryMaterial(kind, code, profile) {
         if (kind === 'WAP7') {
           ctx.fillStyle = '#c62828'; ctx.fillRect(0, 0.58 * h, W, 0.3 * h);
           ctx.fillStyle = '#1e3a8a'; ctx.fillRect(0, 0.55 * h, W, 0.03 * h);
+        } else if (kind === 'WAG9') {
+          ctx.fillStyle = '#e9dcc0'; ctx.fillRect(0, 0.46 * h, W, 0.14 * h);
+          ctx.fillStyle = '#f5c518'; ctx.fillRect(0, 0.6 * h, W, 0.03 * h);
         } else if (kind === 'WAG12') {
           ctx.fillStyle = '#d6d8da'; ctx.fillRect(0, 0, W, 0.5 * h);
           ctx.fillStyle = '#f5c518'; ctx.fillRect(0, 0.5 * h, W, 0.03 * h);
@@ -312,9 +335,10 @@ export function buildCoach(kind, code = 'B1', opts = {}) {
   const L = lv.L;
   const v = vehicleShell(kind);
   v.length = L;
-  const geo = kind === 'RAJ' || kind === 'DUR' ? 'LHB' : kind; // Rajdhani/Duranto are LHB coaches
+  const geo = COACH_BASE[kind] || kind; // Rajdhani/Duranto/Garib Rath are LHB shells, etc.
   v.bogieHalf = geo === 'LHB' || geo === 'VB' ? 7.4 : 7.2;
-  const profile = coachProfile(1.62, 1.05, kind === 'ICF' ? 3.35 : 3.42, 4.06, kind === 'VB' ? 0.55 : 0.42);
+  const profile = coachProfile(1.62, 1.05, geo === 'ICF' ? 3.35 : 3.42, 4.06, geo === 'VB' ? 0.55 : 0.42);
+  v.ac = /^(A|B|H|M|C|E|G)\d/.test(code) || geo === 'VB';
   const bodyMat = liveryMaterial(kind, code, profile);
   const endMat = std(new THREE.Color(lv.body).getHex(), 0.25, 0.55);
   const rings = [{ z: -L / 2, sx: 1, yScale: 1, yb: 1.05 }, { z: L / 2, sx: 1, yScale: 1, yb: 1.05 }];
@@ -360,7 +384,7 @@ export function buildCoach(kind, code = 'B1', opts = {}) {
     const eq = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.5, 1.6), DARK()); eq.position.set(0, 0.75, z); v.group.add(eq);
   }
   // roof: AC units (LHB/VB) or ventilators (ICF/DEMU)
-  if (geo === 'LHB' || geo === 'VB') {
+  if (geo === 'LHB' || geo === 'VB' || v.ac) {
     for (const z of [-L / 2 + 2.4, L / 2 - 2.4]) {
       const ac = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.32, 2.8), std(0x9aa0a6, 0.6, 0.4));
       ac.position.set(0, 4.1, z); v.group.add(ac);
@@ -372,7 +396,7 @@ export function buildCoach(kind, code = 'B1', opts = {}) {
     }
   }
   for (const side of [-1, 1]) {
-    const b = bogie({ axles: 2, wheelR: kind === 'ICF' ? 0.457 : 0.46, wheelbase: 2.56, disc: kind !== 'ICF' });
+    const b = bogie({ axles: 2, wheelR: geo === 'ICF' ? 0.457 : 0.46, wheelbase: 2.56, disc: geo !== 'ICF' });
     b.group.position.z = side * v.bogieHalf;
     v.group.add(b.group);
     v.bogies.push(b.group);
@@ -448,7 +472,8 @@ export function buildLoco(kind = 'WAP7', number = '30512', { cabBothEnds = true,
 
   // roof equipment
   if (!isDiesel) {
-    for (const pz of [-L / 2 + 4.0, L / 2 - 4.0]) v.group.add(pantograph(pz, pz < 0 ? 1 : 0));
+    v.pantos = [];
+    for (const pz of [-L / 2 + 4.0, L / 2 - 4.0]) { const pg = pantograph(pz, pz < 0 ? 1 : 0); v.group.add(pg); v.pantos.push({ group: pg, z: pz, raised: pz < 0 }); }
     const bus = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, L - 7, 6), std(0xb87333, 0.9, 0.3));
     bus.rotation.x = Math.PI / 2; bus.position.set(0.35, 4.55, 0); v.group.add(bus);
     for (const z of [-2.5, 0, 2.5]) {
@@ -478,6 +503,17 @@ export function buildLoco(kind = 'WAP7', number = '30512', { cabBothEnds = true,
   }
   v.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   return v;
+}
+
+// Raise or lower the working (front) pantograph of a locomotive.
+export function setPantograph(v, raised) {
+  const p = v?.pantos?.[0];
+  if (!p || p.raised === raised) return;
+  const g = pantograph(p.z, raised ? 1 : 0);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  p.group.parent.add(g);
+  p.group.removeFromParent();
+  p.group = g; p.raised = raised;
 }
 
 function pantograph(z, raised) {

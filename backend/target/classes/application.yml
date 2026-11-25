@@ -9,7 +9,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5438/railsim}
     username: ${DB_USER:railsim_user}
-    password: ${DB_PASS:railsim_pass}
+    password: ${DB_PASS:${RAILSIM-DB-PASSWORD:railsim_pass}} # Cloud Run: secret env RAILSIM-DB-PASSWORD
     hikari:
       maximum-pool-size: ${DB_POOL:4} # db-f1-micro allows ~25 connections in total
   jpa:

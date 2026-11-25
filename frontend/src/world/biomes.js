@@ -75,6 +75,9 @@ export const BIOMES = {
   }
 };
 
+// suburban railway through a city: buildings right up to the line, few fields
+BIOMES.METRO_SUBURBAN = { ...BIOMES.URBAN_SUBURBAN, village: 3.2, bush: 8, grassiness: 0.25, trees: { neem: 5, acacia: 0.5, palm: 2, tall: 2, banyan: 0.5, khejri: 0 }, dense: true };
+
 export const biomeOf = (key) => BIOMES[key] || BIOMES.DECCAN_PLATEAU;
 
 export function blendBiome(b) {

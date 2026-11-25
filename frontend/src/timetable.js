@@ -11,6 +11,9 @@ export const fmtClock = (m) => {
   return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 };
 
+// Signed difference a − b in minutes on a 24 h clock (−720..720).
+export const minDiff = (a, b) => ((((a - b) % 1440) + 2160) % 1440) - 720;
+
 export class Timetable {
   constructor(layout, ops, rakeType, startMinutes) {
     this.layout = layout;
@@ -78,9 +81,9 @@ export class Timetable {
     const nx = this.ops.nextStation(sFront);
     if (halted && nx) {
       const row = this.rows[nx.index];
-      return Math.max(0, now - (row.dep ?? row.arr));
+      return Math.max(0, minDiff(now, row.dep ?? row.arr));
     }
-    return now - this.scheduledAt(sFront);
+    return minDiff(now, this.scheduledAt(sFront));
   }
 
   eta(row, now, sFront, halted) {
@@ -88,7 +91,11 @@ export class Timetable {
     return row.arr === null ? null : row.arr + Math.max(-2, this.delay(now, sFront, halted));
   }
 
-  recordArrival(st, now) { const a = this.actual.get(st.index) || {}; a.arr = now; this.actual.set(st.index, a); return now - (this.rows[st.index].arr ?? now); }
-  recordDeparture(st, now) { const a = this.actual.get(st.index) || {}; a.dep = now; this.actual.set(st.index, a); }
+  // Booked departure of a station (journey-clock minutes), null for the destination.
+  schedDep(st) { return this.rows[st.index]?.dep ?? null; }
+
+  recordArrival(st, now) { const a = this.actual.get(st.index) || {}; a.arr = now; this.actual.set(st.index, a); return minDiff(now, this.rows[st.index].arr ?? now); }
+  // Returns + late / − early against the booked departure.
+  recordDeparture(st, now) { const a = this.actual.get(st.index) || {}; a.dep = now; this.actual.set(st.index, a); const d = this.rows[st.index].dep; return d == null ? 0 : minDiff(now, d); }
   recordPass(st, now) { const a = this.actual.get(st.index) || {}; if (a.pass === undefined) a.pass = now; this.actual.set(st.index, a); }
 }

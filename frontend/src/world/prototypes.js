@@ -7,18 +7,28 @@ import { mulberry32 } from '../core/rng.js';
 const protos = new Map();
 const once = (k, fn) => { if (!protos.has(k)) protos.set(k, fn()); return protos.get(k); };
 
-function blob(radius, detail, seed, squashY = 1, jitter = 0.28) {
+// Organic lump: an icosphere pushed in and out by smooth, seeded low-frequency noise (no
+// per-vertex spikes), so canopies and rocks read as soft natural forms rather than faceted boxes.
+function blob(radius, detail, seed, squashY = 1, jitter = 0.28, flatten = true) {
   const g = new THREE.IcosahedronGeometry(radius, detail);
   const rand = mulberry32(seed);
-  const p = g.attributes.position;
-  const map = new Map();
-  for (let i = 0; i < p.count; i++) {
-    const key = `${p.getX(i).toFixed(3)},${p.getY(i).toFixed(3)},${p.getZ(i).toFixed(3)}`;
-    if (!map.has(key)) map.set(key, 1 + (rand() - 0.5) * 2 * jitter);
-    const k = map.get(key);
-    p.setXYZ(i, p.getX(i) * k, p.getY(i) * k * squashY, p.getZ(i) * k);
+  const waves = [];
+  for (let i = 0; i < 6; i++) {
+    const th = rand() * Math.PI * 2, ph = Math.acos(rand() * 2 - 1);
+    waves.push({ d: [Math.sin(ph) * Math.cos(th), Math.cos(ph), Math.sin(ph) * Math.sin(th)], f: 1.5 + i * 1.1 + rand(), o: rand() * 6.28, w: 1 / (1 + i * 0.7) });
   }
-  // weld vertices so canopies get smooth (not faceted) shading
+  const wsum = waves.reduce((a, w) => a + w.w, 0);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i), l = Math.hypot(x, y, z) || 1;
+    const nx = x / l, ny = y / l, nz = z / l;
+    let n = 0;
+    for (const w of waves) n += Math.sin((nx * w.d[0] + ny * w.d[1] + nz * w.d[2]) * w.f + w.o) * w.w;
+    const k = 1 + (n / wsum) * jitter * 1.6;
+    p.setXYZ(i, x * k, y * k * squashY, z * k);
+  }
+  // flatten the underside a little (canopies hang, boulders sit)
+  if (flatten) for (let i = 0; i < p.count; i++) if (p.getY(i) < -radius * 0.35 * squashY) p.setY(i, -radius * 0.35 * squashY + (p.getY(i) + radius * 0.35 * squashY) * 0.45);
   g.deleteAttribute('normal'); g.deleteAttribute('uv');
   const w = mergeVertices(g, 1e-3);
   w.computeVertexNormals();
@@ -41,10 +51,12 @@ export const P = {
     return merge([t, b1, b2]);
   }),
   neemCanopy: () => once('neemCanopy', () => {
-    const a = blob(2.8, 1, 1, 0.78); a.translate(0, 5.2, 0);
-    const b = blob(2.0, 1, 2, 0.8); b.translate(1.6, 4.6, 0.6);
-    const c = blob(2.1, 1, 3, 0.8); c.translate(-1.5, 4.7, -0.5);
-    return merge([a, b, c]);
+    const a = blob(2.6, 1, 1, 0.78); a.translate(0, 5.3, 0);
+    const b = blob(1.9, 1, 2, 0.8); b.translate(1.7, 4.6, 0.6);
+    const c = blob(2.0, 1, 3, 0.8); c.translate(-1.5, 4.7, -0.5);
+    const d = blob(1.5, 1, 11, 0.85); d.translate(0.3, 4.4, -1.8);
+    const e = blob(1.4, 1, 12, 0.85); e.translate(-0.6, 6.2, 1.4);
+    return merge([a, b, c, d, e]);
   }),
   acaciaTrunk: () => once('acaciaTrunk', () => {
     const t = new THREE.CylinderGeometry(0.12, 0.22, 3.8, 6); t.rotateZ(0.12); t.translate(0.2, 1.9, 0);
@@ -116,8 +128,13 @@ export const P = {
     const c = a.clone(); c.rotateY(Math.PI / 4);
     return merge([a, b, c]);
   }),
-  bush: () => once('bush', () => { const b = blob(0.9, 1, 40, 0.7, 0.35); b.translate(0, 0.45, 0); return b; }),
-  boulder: () => once('boulder', () => blob(1, 1, 50, 0.85, 0.32)),
+  bush: () => once('bush', () => {
+    const a = blob(0.8, 1, 40, 0.7, 0.4); a.translate(0, 0.45, 0);
+    const b = blob(0.55, 1, 41, 0.75, 0.4); b.translate(0.6, 0.35, 0.3);
+    const c = blob(0.5, 1, 42, 0.75, 0.4); c.translate(-0.5, 0.32, -0.35);
+    return merge([a, b, c]);
+  }),
+  boulder: () => once('boulder', () => blob(1, 2, 50, 0.85, 0.3, false)), // full height: tors stack these on each other
   pole: () => once('pole', () => {
     const p = new THREE.CylinderGeometry(0.07, 0.1, 7, 5); p.translate(0, 3.5, 0);
     const a = new THREE.BoxGeometry(1.4, 0.08, 0.08); a.translate(0, 6.6, 0);

@@ -3,6 +3,7 @@ import { M } from '../core/materials.js';
 import { Batcher } from '../core/batcher.js';
 import { makeRng, pick, range, smoothstep } from '../core/rng.js';
 import { GeoAccum, meshFrom } from './geoAccum.js';
+import { RoadTraffic } from './vehicles.js';
 
 // Civil structures around Guntakal: the through-truss span of the ROR flyover,
 // the Road-over-Bridge east of the station, and the VV Nagar road underpass.
@@ -84,10 +85,12 @@ export function buildROB(group, P0, H0, a, { piers, abutL, abutR, rampLen = 160,
     const g = at((abutL + abutR) / 2, deckTop - 1.45, f);
     bat.box(M.darkConcrete(), g.x, g.y, g.z, 0.6, 1.2, span, yaw);
   }
-  // fascia with ROB name facing the railway (both sides)
+  // direction boards on the fascia (both faces). Seen from a train leaving Guntakal (the face toward
+  // the station) VV Nagar is to the left and the town to the right; from the other side it is mirrored.
   for (const f of [-W / 2 - 0.05, W / 2 + 0.05]) {
     const fp = at((abutL + abutR) / 2, deckTop - 0.9, f);
-    bat.box(M.textBoard('ROAD OVER BRIDGE  •  GUNTAKAL', { bg: '#e9e2cf', fg: '#7c2a1d', w: 1024, h: 96, font: 'bold 52px Arial' }), fp.x, fp.y, fp.z, 0.06, 1.1, Math.min(span, 26), yaw, false);
+    const text = f < 0 ? '⬅  V.V. NAGAR            TOWN  ➡' : '⬅  TOWN            V.V. NAGAR  ➡';
+    bat.box(M.textBoard(text, { bg: '#0b6b3a', fg: '#ffffff', w: 1024, h: 96, font: 'bold 54px Arial' }), fp.x, fp.y, fp.z, 0.06, 1.1, Math.min(span, 26), yaw, false);
   }
   // piers: cap beam + twin columns
   for (const l of piers) {
@@ -139,21 +142,13 @@ export function buildROB(group, P0, H0, a, { piers, abutL, abutR, rampLen = 160,
     const lp = at(l, h + 8.9, -W / 2 + 1.4);
     bat.box(M.lampHead(), lp.x, lp.y, lp.z, 1.6, 0.16, 0.4, yaw + Math.PI / 2, false);
   }
-  // traffic on the bridge
-  const vehicles = [[2.5, 3.1, 9, 0xd35400], [1.6, 1.7, 4.3, 0xffffff], [1.4, 1.6, 2.7, 0x2e7d32], [2.5, 3.2, 10, 0x1565c0], [1.8, 1.5, 4.5, 0x37474f]];
-  for (let i = 0; i < 7; i++) {
-    const v = pick(rand, vehicles);
-    const l = range(rand, lEnd0 + 40, lEnd1 - 40);
-    const lane = rand() < 0.5 ? -2 : 2;
-    const h = heightAt(l);
-    const p = at(l, h + v[1] / 2 + 0.35, lane);
-    bat.box(M.plaster(v[3]), p.x, p.y, p.z, v[0], v[1], v[2], yaw);
-    const w = at(l, h + 0.35, lane);
-    bat.box(M.black(), w.x, w.y, w.z, v[0] * 0.95, 0.6, v[2] * 0.85, yaw, false);
-  }
+  // traffic over the bridge and its approach ramps (cars, buses, lorries, autos, bikes)
+  const roadPts = frames.map((f) => ({ x: f.x, y: f.y, z: f.z }));
+  const traffic = new RoadTraffic(group, roadPts, { count: 12, rand, laneOff: 2.2 });
   group.add(bat.build());
   // corridor for prop exclusion / OHE mast avoidance
   return {
+    animate: (dt) => traffic.update(dt),
     contains: (x, z, pad = 0) => {
       const dx = x - (P0.x + F.x * a), dz = z - (P0.z + F.z * a);
       const along = dx * F.x + dz * F.z, lat = dx * R.x + dz * R.z;

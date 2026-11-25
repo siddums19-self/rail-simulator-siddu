@@ -19,6 +19,10 @@ public class RailHub {
     @Column(name = "mandatory_reversal")
     public boolean mandatoryReversal;
 
+    /** Dead-end terminus (Howrah, Hyderabad Deccan, Chennai Central, Mumbai CSMT): trains can only start, end or reverse here. */
+    @Column(name = "terminal")
+    public boolean terminal;
+
     public double lat;
     public double lon;
 }

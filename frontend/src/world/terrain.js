@@ -85,7 +85,7 @@ export class Terrain {
     const de = this.extra.count ? this.extra.distance(x, z, 420) : Infinity;
     const dFlat = Math.min(d, de + 30);
     const biome = blendBiome(L.biomeAt(s));
-    const t = smoothstep(flatW, flatW + 280, dFlat);
+    const t = smoothstep(flatW, flatW + 280, dFlat) * (this.water ? 1 - this.water.riverMaskAt(s) : 1); // flat river valleys
     let hills = 0;
     if (t > 0) {
       if (biome._A) {
@@ -97,14 +97,16 @@ export class Terrain {
       const dz = Math.hypot(x - fz.x, z - fz.z);
       if (dz < fz.r + 60) micro *= smoothstep(fz.r, fz.r + 60, dz);
     }
-    const h = gy - 0.07 + hills * t + micro * (0.35 + 0.65 * t);
+    let h = gy - 0.07 + hills * t + micro * (0.35 + 0.65 * t);
+    if (this.water) h = this.water.carve(x, z, near, h);
     return { h, biome, d: Math.min(d, de), t };
   }
 
   _colorAt(x, z, info, slope, out) {
     const B = info.biome;
     const n1 = fbm2(x / 90, z / 90, 3, 5);
-    const n2 = valueNoise2(x / 14, z / 14, 9);
+    // soft mid-scale variation (a fine per-vertex noise read as a chequer of squares)
+    const n2 = valueNoise2(x / 37, z / 37, 9) * 0.65 + fbm2(x / 160, z / 160, 2, 41) * 0.35;
     const g = Math.min(1, Math.max(0, (n1 - 0.5) * 2.2 + B.grassiness - 0.15 + (n2 - 0.5) * 0.3));
     let r = B.soil[0] + (B.grass[0] - B.soil[0]) * g;
     let gg = B.soil[1] + (B.grass[1] - B.soil[1]) * g;
@@ -122,7 +124,7 @@ export class Terrain {
     const cess = (1 - smoothstep(3, 9, info.d)) * 0.55;
     const cr = (B.cess[0] + B.soil[0]) * 0.5, cg = (B.cess[1] + B.soil[1]) * 0.5, cb = (B.cess[2] + B.soil[2]) * 0.5;
     r += (cr - r) * cess; gg += (cg - gg) * cess; b += (cb - b) * cess;
-    const v = 0.8 + n2 * 0.32;
+    const v = 0.84 + n2 * 0.24;
     out[0] = r * v; out[1] = gg * v; out[2] = b * v;
   }
 
@@ -139,7 +141,8 @@ export class Terrain {
     for (let j = 0; j < ext; j++) {
       for (let i = 0; i < ext; i++) {
         const x = x0 + (i - 1) * step, z = z0 + (j - 1) * step;
-        const near = cand.length ? this.path.nearest(x, z, cand) : { s: farNear.s, lat: 1e5, dist: Math.max(900, farNear.dist) };
+        // far from the line: keep which side of it we are on (the sea lies on one side)
+        const near = cand.length ? this.path.nearest(x, z, cand) : { s: farNear.s, lat: (farNear.lat < 0 ? -1 : 1) * Math.max(900, Math.abs(farNear.lat)), dist: Math.max(900, farNear.dist) };
         const info = this._height(x, z, near);
         H[j * ext + i] = info.h;
         infos[j * ext + i] = info;
@@ -167,7 +170,9 @@ export class Terrain {
     const idx = [];
     for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
       const a = j * N + i, b = a + 1, cc = a + N, d = cc + 1;
-      idx.push(a, cc, b, b, cc, d);
+      // alternate the quad diagonal so the grid doesn't show up as rows of squares
+      if (((i * 73856093) ^ (j * 19349663) ^ (ix * 83492791) ^ iz) & 1) idx.push(a, cc, b, b, cc, d);
+      else idx.push(a, cc, d, a, d, b);
     }
     // skirts hide cracks between LOD levels
     const edges = [
@@ -212,7 +217,7 @@ export class Terrain {
       const tx = (cx + i + 0.5) * T, tz = (cz + j + 0.5) * T;
       const d = Math.hypot(tx - focus.x, tz - focus.z);
       if (d > R + T * 0.7) continue;
-      const res = d < 1000 ? 40 : 16;
+      const res = d < 700 ? 64 : d < 1400 ? 32 : 16;
       want.push({ ix: cx + i, iz: cz + j, d, res });
     }
     want.sort((a, b) => a.d - b.d);

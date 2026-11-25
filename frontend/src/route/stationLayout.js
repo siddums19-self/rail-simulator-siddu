@@ -33,7 +33,8 @@ export function platformLength(n) {
 // entryBranches / exitBranches: { sign, targets } — at a junction station the tracks on
 // one side run straight on into separate lines (e.g. Guntakal: Gooty Down/Up + goods line)
 // instead of all funnelling into the single running line.
-function buildLadder(tracks, key) {
+// maxLen: compact throat (Guntakal's east end) — the whole ladder is squeezed into maxLen metres.
+function buildLadder(tracks, key, maxLen = null) {
   const segKey = key === 'Exit' ? 'exitSegs' : 'entrySegs';
   const groups = new Map();
   for (const t of tracks) {
@@ -53,6 +54,10 @@ function buildLadder(tracks, key) {
       const L = fanLength(g[i].o - parent);
       own[i] = [cur, cur + L, g[i].o, parent];
       cur += L + 6;
+    }
+    if (maxLen && cur - 6 > maxLen) { // steeper turnouts, closer together
+      const k = maxLen / (cur - 6);
+      for (const o of own) { o[0] *= k; o[1] *= k; }
     }
     g.forEach((t, i) => {
       const chain = [];
@@ -78,7 +83,8 @@ export function addTrackExit(lane, layout, t) {
 
 // Guntakal: from the Gooty-side lines back across to the Dhone line (a ladder of
 // crossovers just beyond the throat), so every platform can reach Dhone.
-export const GTL_LADDER = [[40, 160, 16.6, 11.3], [180, 300, 11.3, 6.0], [320, 440, 6.0, 0]];
+// (distances past the station boundary; finished before the Dhone line starts to curve away)
+export const GTL_LADDER = [[20, 95, 16.6, 11.3], [100, 170, 11.3, 6.0], [175, 240, 6.0, 0]];
 export function addBranchConnectors(lane, layout, t, { entry = true, exit = true } = {}) {
   if (exit && t.branchExit) {
     const sg = Math.sign(t.mExit), lat = Math.abs(t.mExit);
@@ -91,7 +97,10 @@ export function addBranchConnectors(lane, layout, t, { entry = true, exit = true
   return lane;
 }
 
-export function makeStationLayout({ platforms, entryLine, exitLine, mirror = false, variant = null, goodsLoops = 0, entryBranches = null, exitBranches = null }) {
+// frameOffset / entryBase / exitBase: Guntakal on the Gooty route is built exactly as on the Dhone
+// route (the Dhone line as the station's running line) and then moved sideways so that the Gooty
+// line sits under our path; base is where the Dhone line ends up on that side.
+export function makeStationLayout({ platforms, entryLine, exitLine, mirror = false, variant = null, goodsLoops = 0, entryBranches = null, exitBranches = null, compactEntry = null, compactExit = null, frameOffset = 0, entryBase = 0, exitBase = 0, noXoEntry = false, noXoExit = false }) {
   const doubleAny = entryLine === 'D' || exitLine === 'D';
   let N = Math.max(1, platforms | 0);
   if (doubleAny && N < 2) N = 2;
@@ -197,24 +206,30 @@ export function makeStationLayout({ platforms, entryLine, exitLine, mirror = fal
     for (const t of tracks) { t.o = -t.o; t.pfSide = t.pfSide === 'left' ? 'right' : t.pfSide === 'right' ? 'left' : null; }
     for (const e of elements) { const a = -e.l1, b = -e.l0; e.l0 = a; e.l1 = b; }
   }
+  // sideways move of the whole station (after mirroring, so it is in our route's frame)
+  if (frameOffset) {
+    for (const t of tracks) t.o += frameOffset;
+    for (const e of elements) { e.l0 += frameOffset; e.l1 += frameOffset; }
+  }
 
   // 3. Fan targets for each throat side.
-  const mainFor = (o, line) => {
-    if (line === 'S') return 0;
+  const mainFor = (o, line, base = 0) => {
+    if (line === 'S') return base;
     return o < 0 ? -TRACK.MAIN_HALF : TRACK.MAIN_HALF;
   };
   let maxFanEntry = 0, maxFanExit = 0;
   const branchTargets = (br, key) => {
     if (!br) return new Map();
-    const side = tracks.filter((t) => t.o * br.sign > 3).sort((a, c) => a.o * br.sign - c.o * br.sign);
+    const base = br.base || 0;
+    const side = tracks.filter((t) => (t.o - base) * br.sign > 3).sort((a, c) => (a.o - c.o) * br.sign);
     const m = new Map();
-    side.forEach((t, i) => m.set(t.no, br.sign * br.targets[Math.min(i, br.targets.length - 1)]));
+    side.forEach((t, i) => m.set(t.no, base + br.sign * br.targets[Math.min(i, br.targets.length - 1)]));
     return m;
   };
   const bEntry = branchTargets(entryBranches), bExit = branchTargets(exitBranches);
   for (const t of tracks) {
-    t.mEntry = bEntry.has(t.no) ? bEntry.get(t.no) : mainFor(t.o, entryLine);
-    t.mExit = bExit.has(t.no) ? bExit.get(t.no) : mainFor(t.o, exitLine);
+    t.mEntry = bEntry.has(t.no) ? bEntry.get(t.no) : mainFor(t.o, entryLine, entryBase);
+    t.mExit = bExit.has(t.no) ? bExit.get(t.no) : mainFor(t.o, exitLine, exitBase);
     t.branchEntry = bEntry.has(t.no); t.branchExit = bExit.has(t.no);
     t.fanEntry = fanLength(t.o - t.mEntry);
     t.fanExit = fanLength(t.o - t.mExit);
@@ -226,15 +241,15 @@ export function makeStationLayout({ platforms, entryLine, exitLine, mirror = fal
   // Ladder throats: instead of every track curving into the running line at one
   // point, the outermost track joins its neighbour first, that one joins the next,
   // and so on — staggered turnouts, the way real station yards are laid.
-  buildLadder(tracks, 'Exit');
-  buildLadder(tracks, 'Entry');
+  buildLadder(tracks, 'Exit', compactExit);
+  buildLadder(tracks, 'Entry', compactEntry);
   for (const t of tracks) {
     maxFanEntry = Math.max(maxFanEntry, t.fanEntry);
     maxFanExit = Math.max(maxFanExit, t.fanExit);
   }
 
-  const throatEntry = maxFanEntry + (entryLine === 'D' ? XO_LEN + 40 : 0) + 80;
-  const throatExit = maxFanExit + (exitLine === 'D' ? XO_LEN + 40 : 0) + 80;
+  const throatEntry = maxFanEntry + (entryLine === 'D' && !noXoEntry ? XO_LEN + 40 : 0) + 80;
+  const throatExit = maxFanExit + (exitLine === 'D' && !noXoExit ? XO_LEN + 40 : 0) + 80;
   const pLen = platformLength(N);
 
   const minLat = Math.min(...elements.map((e) => e.l0), ...tracks.map((t) => t.o - 3));
@@ -257,11 +272,11 @@ export function anchorLayout(layout, sCenter) {
   layout.pEnd = sCenter + layout.pLen / 2;
   layout.zoneStart = layout.pStart - layout.throatEntry;
   layout.zoneEnd = layout.pEnd + layout.throatExit;
-  if (layout.entryLine === 'D') {
+  if (layout.entryLine === 'D' && !layout.noXoEntry) {
     layout.xoEntry = { s1: layout.pStart - layout.maxFanEntry - 30 };
     layout.xoEntry.s0 = layout.xoEntry.s1 - XO_LEN;
   }
-  if (layout.exitLine === 'D') {
+  if (layout.exitLine === 'D' && !layout.noXoExit) {
     layout.xoExit = { s0: layout.pEnd + layout.maxFanExit + 30 };
     layout.xoExit.s1 = layout.xoExit.s0 + XO_LEN;
   }
@@ -282,21 +297,46 @@ export function anchorLayout(layout, sCenter) {
 export const playerMain = (line) => (line === 'D' ? -TRACK.MAIN_HALF : 0);
 export const opposingMain = (line) => (line === 'D' ? TRACK.MAIN_HALF : 0);
 
+// Guntakal on the Gooty route: the four lines beyond the east throat (Dhone, Gooty Down, Gooty Up,
+// goods) are joined by a fixed ladder of crossovers [a0, a1, latA, latB] (metres beyond the throat,
+// lateral offsets on our route). A train follows it outward from its platform line, hop by hop,
+// toward our running line. Returns true if it gets there (the platform can be used).
+export function gtlLadder(lane, layout, t, side) {
+  const segs = side === 'exit' ? layout.gtlLadderExit : layout.gtlLadderEntry;
+  if (!segs) return true;
+  const target = playerMain(side === 'exit' ? layout.exitLine : layout.entryLine);
+  let cur = side === 'exit' ? t.mExit : t.mEntry;
+  for (const [a0, a1, p, q] of segs.slice().sort((x, y) => x[0] - y[0])) {
+    const from = Math.abs(cur - p) < 0.01 ? p : Math.abs(cur - q) < 0.01 ? q : null;
+    if (from === null) continue;
+    const to = from === p ? q : p;
+    if (Math.abs(to - target) >= Math.abs(cur - target)) continue;
+    if (lane) {
+      if (side === 'exit') lane.add(layout.zoneEnd + a0, layout.zoneEnd + a1, cur, to);
+      else lane.add(layout.zoneStart - a1, layout.zoneStart - a0, to, cur);
+    }
+    cur = to;
+  }
+  return Math.abs(cur - target) < 0.01;
+}
+
 // Transitions a train must follow to use `track` at this station, travelling +s.
 export function appendStationTransitions(lane, layout, track, { entry = true, exit = true } = {}) {
   const pm = playerMain(layout.entryLine);
   const px = playerMain(layout.exitLine);
   if (entry) {
-    if (layout.entryLine === 'D' && Math.abs(track.mEntry - pm) > 0.01) {
+    if (layout.xoEntry && Math.abs(track.mEntry - pm) > 0.01) {
       lane.add(layout.xoEntry.s0, layout.xoEntry.s1, pm, track.mEntry);
     }
-    if (track.branchEntry) addBranchConnectors(lane, layout, track, { exit: false });
+    if (layout.gtlLadderEntry) gtlLadder(lane, layout, track, 'entry');
+    else if (track.branchEntry) addBranchConnectors(lane, layout, track, { exit: false });
     addTrackEntry(lane, layout, track);
   }
   if (exit) {
     addTrackExit(lane, layout, track);
-    if (track.branchExit) addBranchConnectors(lane, layout, track, { entry: false });
-    if (layout.exitLine === 'D' && Math.abs(track.mExit - px) > 0.01) {
+    if (layout.gtlLadderExit) gtlLadder(lane, layout, track, 'exit');
+    else if (track.branchExit) addBranchConnectors(lane, layout, track, { entry: false });
+    if (layout.xoExit && Math.abs(track.mExit - px) > 0.01) {
       lane.add(layout.xoExit.s0, layout.xoExit.s1, track.mExit, px);
     }
   }

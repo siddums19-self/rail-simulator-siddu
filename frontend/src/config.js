@@ -33,14 +33,24 @@ export const STREAM = {
   TERRAIN_RADIUS: 2600
 };
 
+// brake: full-service deceleration (m/s²); brakeTau: brake-pipe propagation /
+// cylinder fill time constant (s); te/power: goods-style traction model
+// (starting tractive effort per unit mass m/s², power per unit mass W/kg).
 export const RAKES = {
-  VANDE_BHARAT:   { label: 'Vande Bharat EMU',         vmax: 160, traction: 'electric', accel: 0.75 },
-  LHB:            { label: 'WAP-7 + LHB Express',      vmax: 130, traction: 'electric', accel: 0.55 },
-  ICF:            { label: 'WDP-4D + ICF Express',     vmax: 110, traction: 'diesel',   accel: 0.45 },
-  RAJDHANI:       { label: 'WAP-7 + Rajdhani (LHB)',   vmax: 130, traction: 'electric', accel: 0.58 },
-  DURANTO:        { label: 'WAP-7 + Duranto (LHB)',    vmax: 130, traction: 'electric', accel: 0.56 },
-  DEMU_PASSENGER: { label: 'DEMU Local Passenger',     vmax: 90,  traction: 'diesel',   accel: 0.6 },
-  BOXN_GOODS:     { label: 'WAG-12B + BOXN Goods',     vmax: 75,  traction: 'electric', accel: 0.32 }
+  VANDE_BHARAT:   { label: 'Vande Bharat EMU',         vmax: 160, traction: 'electric', accel: 0.75, brake: 1.1, brakeTau: 0.9 },
+  LHB:            { label: 'WAP-7 + LHB Express',      vmax: 130, traction: 'electric', accel: 0.55, brake: 1.1, brakeTau: 1.4 },
+  ICF:            { label: 'WDP-4D + ICF Express',     vmax: 110, traction: 'diesel',   accel: 0.45, brake: 1.0, brakeTau: 1.8 },
+  RAJDHANI:       { label: 'WAP-7 + Rajdhani (LHB)',   vmax: 130, traction: 'electric', accel: 0.58, brake: 1.1, brakeTau: 1.4 },
+  DURANTO:        { label: 'WAP-7 + Duranto (LHB)',    vmax: 130, traction: 'electric', accel: 0.56, brake: 1.1, brakeTau: 1.4 },
+  DEMU_PASSENGER: { label: 'DEMU Local Passenger',     vmax: 90,  traction: 'diesel',   accel: 0.6,  brake: 1.0, brakeTau: 1.0 },
+  VANDE_BHARAT_ORANGE: { label: 'Vande Bharat (saffron)', vmax: 160, traction: 'electric', accel: 0.75, brake: 1.1, brakeTau: 0.9 },
+  GARIB_RATH:     { label: 'WAP-7 + Garib Rath (all AC 3-tier)', vmax: 130, traction: 'electric', accel: 0.52, brake: 1.1, brakeTau: 1.4, moreStops: true },
+  JAN_SHATABDI:   { label: 'WDP-4D + Jan Shatabdi (parrot green)', vmax: 110, traction: 'diesel', accel: 0.47, brake: 1.0, brakeTau: 1.7 },
+  ICF_CREAM:      { label: 'WDP-4D + cream ICF coaches', vmax: 110, traction: 'diesel', accel: 0.45, brake: 1.0, brakeTau: 1.8 },
+  MUMBAI_LOCAL:   { label: 'Mumbai local EMU (12 car)', vmax: 100, traction: 'electric', accel: 0.9, brake: 1.15, brakeTau: 0.9, suburban: true },
+  MMTS_LOCAL:     { label: 'Hyderabad MMTS EMU (9 car)', vmax: 100, traction: 'electric', accel: 0.85, brake: 1.15, brakeTau: 0.9, suburban: true },
+  BOXN_GOODS:     { label: '2× WAG-9 + 58 BOXN Goods', vmax: 75,  traction: 'electric', accel: 0.2,  brake: 0.42, brakeTau: 6.5,
+                    goods: true, te: 0.19, power: 1.85, wagons: 58, releaseTau: 14, dynBrake: 0.24 }
 };
 
 export const AI_TRAIN_NAMES = {
@@ -54,7 +64,7 @@ export const AI_TRAIN_NAMES = {
 };
 
 // Realistic mix for station arrivals/departures and passing traffic.
-export const TRAFFIC_MIX = ['LHB', 'LHB', 'LHB', 'ICF', 'ICF', 'ICF', 'DEMU_PASSENGER', 'DEMU_PASSENGER', 'RAJDHANI', 'DURANTO', 'VANDE_BHARAT'];
+export const TRAFFIC_MIX = ['LHB', 'LHB', 'LHB', 'ICF', 'ICF', 'ICF', 'DEMU_PASSENGER', 'DEMU_PASSENGER', 'RAJDHANI', 'DURANTO', 'VANDE_BHARAT', 'VANDE_BHARAT_ORANGE', 'GARIB_RATH', 'JAN_SHATABDI', 'ICF_CREAM'];
 
 export const QUALITY = {
   ultra:  { pixelRatio: 2,   shadow: 4096, post: true,  samples: 4, density: 1.0 },

@@ -25,7 +25,7 @@ export class AudioEngine {
     this.ctx = ctx;
     this.master = ctx.createGain(); this.master.gain.value = 0.9;
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -14; comp.ratio.value = 4;
+    comp.threshold.value = -14; comp.ratio.value = 4; comp.knee.value = 12; comp.attack.value = 0.012; comp.release.value = 0.28; // gentle: no pumping on clicks
     this.master.connect(comp).connect(ctx.destination);
     this.reverb = ctx.createConvolver();
     this.reverb.buffer = this._impulse(2.2, 2.5);
@@ -35,10 +35,11 @@ export class AudioEngine {
     this.noiseBuf = this._noise(3);
     this._setupRolling();
     this._setupTraction();
-    await Promise.all(['horn', 'engine', 'clatter', 'chime', 'rain', 'crowd'].map((n) => this._load(n)));
+    await Promise.all(['horn', 'engine', 'clatter', 'chime', 'rain', 'crowd', 'ride', 'warning'].map((n) => this._load(n)));
     this._setupRain();
     if (this.buffers.engine) this._setupEngineFile();
     if (this.buffers.clatter) this._setupClatterFile();
+    if (this.buffers.ride) this._setupRideFile();
   }
 
   async _load(name) {
@@ -84,7 +85,7 @@ export class AudioEngine {
     src.connect(this.rollFilter).connect(this.rollGain).connect(this.master);
     src.start();
     const w = ctx.createBufferSource(); w.buffer = this.noiseBuf; w.loop = true; w.playbackRate.value = 1.7;
-    this.windFilter = ctx.createBiquadFilter(); this.windFilter.type = 'bandpass'; this.windFilter.frequency.value = 900; this.windFilter.Q.value = 0.4;
+    this.windFilter = ctx.createBiquadFilter(); this.windFilter.type = 'lowpass'; this.windFilter.frequency.value = 420; this.windFilter.Q.value = 0.5; // low rush, not a hiss
     this.windGain = ctx.createGain(); this.windGain.gain.value = 0;
     w.connect(this.windFilter).connect(this.windGain).connect(this.master);
     w.start();
@@ -125,6 +126,15 @@ export class AudioEngine {
     this.clatFile = s;
   }
 
+  // Recorded train-in-motion loop (public/audio/ride.mp3): fades in as the train picks up speed
+  _setupRideFile() {
+    const s = this.ctx.createBufferSource(); s.buffer = this.buffers.ride; s.loop = true;
+    this.rideGain = this.ctx.createGain(); this.rideGain.gain.value = 0;
+    this.rideTone = this.ctx.createBiquadFilter(); this.rideTone.type = 'lowpass'; this.rideTone.frequency.value = 6000;
+    s.connect(this.rideTone).connect(this.rideGain).connect(this.master); s.start();
+    this.rideSrc = s;
+  }
+
   // --------------------------------------------------------------- horn
   hornStart() {
     if (!this.ctx || !this.enabled || this.hornHeld) return;
@@ -141,9 +151,11 @@ export class AudioEngine {
       const b = this.buffers.horn;
       const src = ctx.createBufferSource();
       src.buffer = b;
-      if (b.duration > 1.2) { src.loop = true; src.loopStart = Math.min(0.5, b.duration * 0.25); src.loopEnd = b.duration - Math.min(0.4, b.duration * 0.2); }
+      // held: the build-up plays once, then the steady part of the blast loops for as long as H is held
+      if (b.duration > 1.2) { src.loop = true; src.loopStart = b.duration * 0.17; src.loopEnd = b.duration * 0.76; }
       src.connect(out); src.start();
       this.hornNodes.push(src);
+      this.hornSrc = src; this.hornT0 = t;
       return;
     }
     // Synthesised Indian loco air horn. Each trumpet = a vibrating reed (bright pulse
@@ -151,13 +163,13 @@ export class AudioEngine {
     // each slightly detuned against itself for the thick "chorus" of a real twin horn.
     // Electric locos (WAP-7) sound higher than diesels (WDP-4D).
     const diesel = this.traction === 'diesel';
-    const tones = diesel ? [277.2, 329.6] : [370, 440];
+    const tones = diesel ? [261.6, 311.1] : [329.6, 415.3]; // twin trumpets, a major third apart (deeper than before)
     const pre = ctx.createGain(); pre.gain.value = 1;
     const shaper = ctx.createWaveShaper();
     const curve = new Float32Array(2048);
     for (let i = 0; i < 2048; i++) { const x = i / 1024 - 1; curve[i] = Math.tanh(x * 1.8) * 0.9 + 0.1 * Math.tanh(x * 6); }
     shaper.curve = curve; shaper.oversample = '4x';
-    const bell1 = ctx.createBiquadFilter(); bell1.type = 'peaking'; bell1.frequency.value = diesel ? 700 : 950; bell1.Q.value = 1.1; bell1.gain.value = 8;
+    const bell1 = ctx.createBiquadFilter(); bell1.type = 'peaking'; bell1.frequency.value = diesel ? 650 : 880; bell1.Q.value = 1.4; bell1.gain.value = 10;
     const bell2 = ctx.createBiquadFilter(); bell2.type = 'peaking'; bell2.frequency.value = diesel ? 1600 : 2100; bell2.Q.value = 1.6; bell2.gain.value = 5;
     const body = ctx.createBiquadFilter(); body.type = 'highpass'; body.frequency.value = 160;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5200; lp.Q.value = 0.5;
@@ -191,6 +203,12 @@ export class AudioEngine {
         this.hornNodes.push(o);
       }
     }
+    // body: a soft sub-octave so the horn has weight, like a real air horn heard close by
+    for (const base of tones) {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(base * 0.5 * 0.92, t); o.frequency.exponentialRampToValueAtTime(base * 0.5, t + 0.18);
+      const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.06, t + 0.12);
+      o.connect(g).connect(pre); o.start(t); this.hornNodes.push(o);
+    }
     // valve "chiff" + air rush
     const hiss = ctx.createBufferSource(); hiss.buffer = this.noiseBuf; hiss.loop = true; hiss.playbackRate.value = 3;
     const hb = ctx.createBiquadFilter(); hb.type = 'bandpass'; hb.frequency.value = 2600; hb.Q.value = 0.7;
@@ -207,6 +225,17 @@ export class AudioEngine {
     const out = this.hornOut;
     out.gain.cancelScheduledValues(t);
     out.gain.setValueAtTime(out.gain.value, t);
+    if (this.buffers.horn && this.hornSrc) {
+      // released: stop looping and let the recorded blast tail off naturally (a quick tap still sounds a short toot)
+      const held = t - this.hornT0;
+      this.hornSrc.loop = false;
+      const fadeAt = held < 0.45 ? t + Math.max(0.25, 0.45 - held) : t + 0.35;
+      out.gain.setValueAtTime(out.gain.value, fadeAt);
+      out.gain.exponentialRampToValueAtTime(0.0001, fadeAt + 0.3);
+      for (const n of this.hornNodes) { try { n.stop(fadeAt + 0.35); } catch { /* already stopped */ } }
+      this.hornSrc = null;
+      return;
+    }
     out.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
     for (const n of this.hornNodes) { try { n.stop(t + 0.3); } catch { /* already stopped */ } }
     if (!this.buffers.horn) {
@@ -221,8 +250,22 @@ export class AudioEngine {
   }
 
   // Distant horn of a passing AI train (quieter, filtered, panned).
-  distantHorn(gain = 0.35, pan = 0) {
+  distantHorn(gain = 0.35, pan = 0, blast = 1.4) {
     if (!this.ctx || !this.enabled) return;
+    if (false && this.buffers.horn) { // other trains keep the synthesised horn (the recording is for our own loco only)
+      const ctx = this.ctx, t = ctx.currentTime, b = this.buffers.horn;
+      const src = ctx.createBufferSource(); src.buffer = b;
+      src.playbackRate.value = 0.97 + Math.random() * 0.06;            // each loco's horn is a little different
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900 + 5000 * Math.min(1, gain / 0.55);
+      const p = ctx.createStereoPanner(); p.pan.value = Math.max(-0.9, Math.min(0.9, pan));
+      const g = ctx.createGain(); const dur = Math.min(b.duration, blast);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.002, gain), t + 0.08);
+      g.gain.setValueAtTime(Math.max(0.002, gain), t + dur - 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(lp).connect(g).connect(p); p.connect(this.master);
+      const wet = ctx.createGain(); wet.gain.value = 0.6 * Math.min(1, 0.2 + (0.55 - gain)); g.connect(wet).connect(this.reverb); // far away: more echo
+      src.start(t, 0); src.stop(t + dur + 0.05);
+      return;
+    }
     const ctx = this.ctx, t = ctx.currentTime;
     const out = ctx.createGain(); out.gain.setValueAtTime(0.0001, t);
     out.gain.exponentialRampToValueAtTime(gain, t + 0.1);
@@ -242,15 +285,17 @@ export class AudioEngine {
   }
 
   // ------------------------------------------------------- station chime
-  stationChime(text) {
+  // level: the announcement's volume (so chime and voice match); interior: heard from inside the cab
+  stationChime(text, level = 0.38, interior = false) {
     if (!this.ctx || !this.enabled) return;
     const ctx = this.ctx;
     if (this.buffers.chime) {
-      // heard from the platform PA speakers: quieter, band-limited, mostly reverberant
+      // heard from the platform PA speakers: same loudness as the voice, a little band-limited, with the platform echo
       const s = ctx.createBufferSource(); s.buffer = this.buffers.chime;
-      const pa = ctx.createBiquadFilter(); pa.type = 'bandpass'; pa.frequency.value = 1400; pa.Q.value = 0.6;
-      const pg = ctx.createGain(); pg.gain.value = 0.35;
-      s.connect(pa).connect(pg); pg.connect(this.master); pg.connect(this.reverb); s.start();
+      const pa = ctx.createBiquadFilter(); pa.type = interior ? 'lowpass' : 'highpass'; pa.frequency.value = interior ? 1800 : 220;
+      const pg = ctx.createGain(); pg.gain.value = Math.max(0.05, level * (interior ? 0.55 : 0.9));
+      const wet = ctx.createGain(); wet.gain.value = interior ? 0.25 : 0.7;
+      s.connect(pa).connect(pg); pg.connect(this.master); pg.connect(wet).connect(this.reverb); s.start();
     } else {
       const notes = [659.3, 830.6, 987.8, 1318.5];
       notes.forEach((f, i) => {
@@ -393,12 +438,20 @@ export class AudioEngine {
   beep() {
     if (!this.ctx || !this.enabled) return;
     const t = this.ctx.currentTime;
+    if (this.buffers.warning) { // recorded alert, kept low and never overlapping itself
+      if (t < (this._warnUntil || 0)) return;
+      const s = this.ctx.createBufferSource(); s.buffer = this.buffers.warning;
+      const g = this.ctx.createGain(); g.gain.value = 0.22;
+      s.connect(g).connect(this.master); s.start(t);
+      this._warnUntil = t + this.buffers.warning.duration;
+      return;
+    }
     const o = this.ctx.createOscillator(); o.type = 'square'; o.frequency.value = 1250;
     const g = this.ctx.createGain(); g.gain.setValueAtTime(0.06, t); g.gain.setValueAtTime(0, t + 0.15);
     o.connect(g).connect(this.master); o.start(t); o.stop(t + 0.2);
   }
 
-  _click(t, gain, bright) {
+  _click(t, gain, bright, joint = false) {
     const ctx = this.ctx;
     const s = ctx.createBufferSource(); s.buffer = this.noiseBuf;
     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = bright ? 1900 : 700; bp.Q.value = 1.2;
@@ -406,9 +459,53 @@ export class AudioEngine {
     g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
     s.connect(bp).connect(g).connect(this.master);
     s.start(t, Math.random() * 2, 0.09);
+    if (!joint) return;
+    // the wheel dropping over the joint: a deep thump ...
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(48, t + 0.09);
+    const og = ctx.createGain(); og.gain.setValueAtTime(0.0001, t); og.gain.linearRampToValueAtTime(gain * 0.45, t + 0.006); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+    o.connect(og).connect(this.master); o.start(t); o.stop(t + 0.14);
+    // ... and the rail ringing briefly (steel: two close resonances)
+    const r = ctx.createBufferSource(); r.buffer = this.noiseBuf;
+    const r1 = ctx.createBiquadFilter(); r1.type = 'bandpass'; r1.frequency.value = 2350 + Math.random() * 300; r1.Q.value = 14;
+    const r2 = ctx.createBiquadFilter(); r2.type = 'bandpass'; r2.frequency.value = 3400 + Math.random() * 300; r2.Q.value = 16;
+    const rg = ctx.createGain(); rg.gain.setValueAtTime(gain * 0.9, t); rg.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    r.connect(r1).connect(rg); r.connect(r2).connect(rg); rg.connect(this.master); if (this.reverb) rg.connect(this.reverb);
+    r.start(t, Math.random() * 2, 0.18);
   }
 
   // ---------------------------------------------------------------- update
+  // Water ambience: river rush, lake / tank lapping, sea surf (three noise beds, faded by distance)
+  _setupWater() {
+    const ctx = this.ctx;
+    const bed = (rate, type, freq, q = 0.7) => {
+      const src = ctx.createBufferSource(); src.buffer = this.noiseBuf; src.loop = true; src.playbackRate.value = rate;
+      const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+      const g = ctx.createGain(); g.gain.value = 0;
+      src.connect(f).connect(g).connect(this.master); src.start();
+      return g;
+    };
+    this.riverGain = bed(1.0, 'bandpass', 1100, 0.5);
+    this.lakeGain = bed(0.7, 'lowpass', 700);
+    this.seaGain = bed(0.55, 'lowpass', 520);
+    // waves: slow swell on the sea, small lapping on the lake
+    const lfo = (hz, depth, target) => { const o = ctx.createOscillator(); o.frequency.value = hz; const g = ctx.createGain(); g.gain.value = depth; o.connect(g).connect(target.gain); o.start(); };
+    this.seaMod = ctx.createGain(); this.seaMod.gain.value = 1; this.seaGain.disconnect(); this.seaGain.connect(this.seaMod).connect(this.master);
+    lfo(0.11, 0.8, this.seaMod);
+    this.lakeMod = ctx.createGain(); this.lakeMod.gain.value = 1; this.lakeGain.disconnect(); this.lakeGain.connect(this.lakeMod).connect(this.master);
+    lfo(0.45, 0.6, this.lakeMod);
+  }
+
+  // levels 0..1 by distance (computed by the caller); quieter from inside the cab
+  ambience({ river = 0, lake = 0, sea = 0, interior = false } = {}) {
+    if (!this.ctx) return;
+    if (!this.riverGain) this._setupWater();
+    const t = this.ctx.currentTime, on = this.enabled ? (interior ? 0.35 : 1) : 0;
+    this.riverGain.gain.setTargetAtTime(on * river * 0.09, t, 0.6);
+    this.lakeGain.gain.setTargetAtTime(on * lake * 0.05, t, 0.8);
+    this.seaGain.gain.setTargetAtTime(on * sea * 0.14, t, 1.0);
+  }
+
   _setupNatural() {
     const ctx = this.ctx;
     // flange squeal on tight curves
@@ -512,9 +609,11 @@ export class AudioEngine {
       const sqk = bk > 0.12 && v > 0.12 && v < 13 ? bk * Math.pow(1 - v / 13, 1.4) * (v < 2.5 ? 1.4 : 1) * this._sqFl : 0;
       this.brakeSq.gain.setTargetAtTime(on * sqk * (interior ? 0.012 : 0.022), t, sqk > 0 ? 0.06 : 0.04);
       // driver's brake valve exhausting brake-pipe air on each application
-      if (brake - this._prevBrake > 6 && on) this._hiss(t, 0.5 + (brake - this._prevBrake) / 60, 0.045, 1700);
+
       for (const { o, f } of this.brakeSqOsc) o.frequency.setTargetAtTime(f * (1 + (1 - v / 13) * 0.04), t, 0.2);
       // brake release hiss & slack clanks
+
+      if (brake - this._prevBrake > 6 && on) this._hiss(t, 0.5 + (brake - this._prevBrake) / 60, 0.045, 1700);
       if (this._prevBrake > 10 && brake < 3) this._hiss(t, 1.4, 0.05 * on, 2200);
       this._prevBrake = brake;
       const moving = v > 0.4;
@@ -560,7 +659,7 @@ export class AudioEngine {
     const vol = interior ? 0.75 : 1;
     this.rollGain.gain.setTargetAtTime(on * Math.min(0.32, v * 0.012) * vol, t, 0.2);
     this.rollFilter.frequency.setTargetAtTime(160 + v * 18, t, 0.3);
-    this.windGain.gain.setTargetAtTime(on * Math.min(0.18, v * v * 0.00012) * (interior ? 0.3 : 1), t, 0.3);
+    this.windGain.gain.setTargetAtTime(on * Math.min(0.08, v * v * 0.00006) * (interior ? 0.25 : 1), t, 0.3);
     this.brakeGain.gain.setTargetAtTime(on * (brake > 0 && v > 0.5 ? 0.02 + brake * 0.0007 : 0), t, 0.15);
     const load = notch / 8;
     if (traction === 'electric') {
@@ -579,6 +678,14 @@ export class AudioEngine {
       this.engFileGain.gain.setTargetAtTime(on * (0.25 + load * 0.5), t, 0.3);
       this.tracGain.gain.setTargetAtTime(0, t, 0.1);
     }
+    if (this.rideSrc) {
+      // volume follows speed (silent when standing, full by ~80 km/h), pitch rises gently with speed;
+      // it was recorded inside a coach, so it is loudest in the cab and softer / duller from outside
+      const k = Math.min(1, v / 22), ease = k * k * (3 - 2 * k);
+      this.rideSrc.playbackRate.setTargetAtTime(0.8 + Math.min(v, 36) / 36 * 0.45, t, 0.4);
+      this.rideGain.gain.setTargetAtTime(on * ease * (interior ? 0.7 : 0.38) * vol, t, 0.35);
+      this.rideTone.frequency.setTargetAtTime(interior ? 3800 : 2200, t, 0.3); // trim the recording's tape hiss
+    }
     if (this.clatFile) {
       this.clatFile.playbackRate.setTargetAtTime(Math.max(0.3, v / 25), t, 0.3);
       this.clatFileGain.gain.setTargetAtTime(on * Math.min(0.6, v * 0.03), t, 0.3);
@@ -588,12 +695,24 @@ export class AudioEngine {
       const spacing = onTurnout ? 4.5 : 26;
       while (this._jointAcc > spacing) {
         this._jointAcc -= spacing;
+        // with the recorded ride sound playing, plain-track joints are already in the recording:
+        // only the points (frogs) still click, softly and without the low thump
+        if (this.rideSrc && !onTurnout) continue;
+        const soft = !!this.rideSrc;
         const g = Math.min(0.5, 0.08 + v * 0.01) * (onTurnout ? 1.6 : 1) * vol;
         const gapA = 2.56 / Math.max(v, 1);  // axle spacing / speed
         const gapB = 14.8 / Math.max(v, 1);  // bogie centres / speed
-        this._click(t + 0.01, g, onTurnout);
-        this._click(t + 0.01 + gapA, g * 0.85, onTurnout);
-        if (gapB < 1.6) { this._click(t + 0.01 + gapB, g * 0.7, onTurnout); this._click(t + 0.01 + gapB + gapA, g * 0.6, onTurnout); }
+        const gg = soft ? g * 0.45 : g * 0.8;
+        this._click(t + 0.01, gg, onTurnout, !soft);
+        this._click(t + 0.01 + gapA, gg * 0.85, onTurnout, !soft);
+        if (gapB < 1.6) { this._click(t + 0.01 + gapB, gg * 0.7, onTurnout, !soft); this._click(t + 0.01 + gapB + gapA, gg * 0.6, onTurnout, !soft); }
+        if (soft) continue;
+        // the coaches behind: each coupled pair of bogies passes the same joint a coach-length later
+        const coach = 23.5 / Math.max(v, 1);
+        for (let k = 1; k <= 5 && coach * k < 2.4; k++) {
+          const gk = g * Math.pow(interior ? 0.55 : 0.68, k), tk = t + 0.01 + coach * k - 1.9 / Math.max(v, 1);
+          this._click(tk, gk, false, true); this._click(tk + gapA, gk * 0.85, false, true);
+        }
       }
     }
   }

@@ -7,7 +7,7 @@ substitutions:
   _REPO: cloud-run-source-deploy   # existing Artifact Registry repo (asia-south1)
   _SERVICE: rail-simulator-be
   _SQL_INSTANCE: rail-simulator      # Cloud SQL instance id (its region is looked up at deploy time)
-  _DB_NAME: railsim
+  _DB_NAME: railsim                  # database inside the instance
   _DB_USER: postgres
   _DB_SECRET: railsim-db-password                             # Secret Manager secret
   _RUN_SA: 744714946530-compute@developer.gserviceaccount.com
@@ -41,6 +41,12 @@ steps:
         # project:region:instance, whatever region the instance is in
         CONN=$$(gcloud sql instances describe ${_SQL_INSTANCE} --format='value(connectionName)')
         echo "Cloud SQL connection: $$CONN"
+        # make sure the app database exists (Liquibase creates the tables on first start);
+        # needs Cloud SQL Editor/Admin on the build account, otherwise create it once by hand
+        if ! gcloud sql databases describe ${_DB_NAME} --instance=${_SQL_INSTANCE} >/dev/null 2>&1; then
+          gcloud sql databases create ${_DB_NAME} --instance=${_SQL_INSTANCE} \
+            || echo "WARNING: could not create database ${_DB_NAME}; create it in Cloud SQL > Databases"
+        fi
         gcloud run deploy ${_SERVICE} \
           --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID \
           --region=${_REGION} \
