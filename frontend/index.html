@@ -132,6 +132,8 @@
     .sec-card button.on, .sec-card button.go { background: #15803d; border-color: #22c55e; } .sec-card button.go { font-weight: 700; }
     /* ---------- phones & tablets (body.mobile is set from the device and screen size) ---------- */
     .mobile-only { display: none; }
+    #btn-vcd.show { background: #b45309; border-color: #fbbf24; animation: vcdblink .5s steps(2) infinite; }
+    @keyframes vcdblink { 50% { background: #78350f; } }
     #mp-panel { position: fixed; right: 12px; top: 200px; width: 290px; z-index: 22; display: none; font-size: 12px; }
     #mp-table { width: 100%; border-collapse: collapse; margin-top: 6px; } #mp-table td { padding: 3px 4px; border-bottom: 1px solid #1f2a3d; }
     #mp-table tr.me td { color: #fde047; }
@@ -363,6 +365,8 @@
         <button id="btn-incidents" class="on tog" data-i="⚡" title="Random breakdowns and incidents, each with its real procedure">Incidents</button>
         <button id="btn-derail" class="tog" data-i="💥" title="Realistic derailment on gross overspeed over points and curves (off = penalty + heavy lurch only)">Derail: off</button>
         <button id="btn-lights" class="tog" data-i="💡" title="Headlight: Auto (dark / fog / rain), On or Off — key L">Lights: Auto</button>
+        <button id="btn-calls" class="on tog" data-i="🗣" title="Loco pilot and assistant call out each signal">Signal calls</button>
+        <button id="btn-vcdon" class="on tog" data-i="⏱" title="Vigilance control device: acknowledge every 60 s or the brakes apply">VCD</button>
         <button id="btn-wipers" class="tog" data-i="🌧" title="Windscreen wipers: Auto (rain), On or Off — key I">Wipers: Auto</button>
       </div>
       <div class="tb-group"><span class="tb-h">Profile</span>
@@ -393,9 +397,18 @@
           <option value="MONSOON">Monsoon rain (washouts)</option>
           <option value="FOG">Winter fog (75 km/h, FSD)</option>
           <option value="DYNAMIC">Dynamic (changes as you go)</option>
+          <option value="LIVE">Live (real weather on this route)</option>
+        </select>
+        <select id="sel-fest" title="Festival decorations">
+          <option value="AUTO">Festival: by date</option>
+          <option value="NONE">No festival</option>
+          <option value="DIWALI">🪔 Diwali</option>
+          <option value="GANESH">🐘 Ganesh Chaturthi</option>
+          <option value="SANKRANTI">🪁 Sankranti</option>
         </select>
         <select id="sel-time" title="Jump to time">
           <option value="">Time…</option>
+          <option value="LIVE">🕒 Live (my clock)</option>
           <option value="330">05:30 Dawn</option>
           <option value="435">07:15 Morning</option>
           <option value="720">12:00 Noon</option>
@@ -559,6 +572,7 @@
         <option value="DHNE">Dhone</option>
       </select>
     </div>
+    <div class="row"><label class="muted" style="font-size:12px;"><input type="checkbox" id="chk-night"> 🌙 Night mail run — 23:30 start, dim platforms, sleeping passengers (go gently, horn only where needed)</label></div>
     <div class="row"><span class="muted lbl">Train</span>
       <select id="sel-rake" style="flex:1;">
         <option value="VANDE_BHARAT">Vande Bharat (160 km/h)</option>
@@ -680,6 +694,7 @@
         <button id="btn-brk">Brake (Space)</button>
         <button id="btn-rel">Release (R)</button>
         <button id="btn-emg" style="background:#7f1d1d;border-color:#ef4444;">EMG (E)</button>
+        <button id="btn-vcd" title="Vigilance control device: acknowledge every 60 s while running (key B)">VCD (B)</button>
         <button id="horn-btn">HORN (H)</button>
         <button id="btn-panto" class="on" title="Raise / lower the pantograph (P)">Panto: up</button>
       </div>

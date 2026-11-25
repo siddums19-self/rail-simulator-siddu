@@ -109,6 +109,8 @@ function toDevanagari(name) {
 
 const clean = (name) => name.replace(/\b(JN|JN\.|JUNCTION|CANTT|ROAD)\b/g, (m) => (m === 'ROAD' ? 'ROAD' : '')).replace(/\s+/g, ' ').trim();
 
+export const localLang = (code) => N[code]?.[0] || null;
+
 export function boardNames(code, englishName) {
   const e = N[code];
   if (e) return { lang: e[0], local: e[1], hi: e[2] };

@@ -1,3 +1,4 @@
+import { decorateStation } from './festivals.js';
 import { planAirport, buildAirport } from './airport.js';
 import { planSecunderabad, buildSecunderabad } from './secunderabad.js';
 import { PolylineIndex } from './terrain.js';
@@ -292,6 +293,7 @@ export class World {
       lights.push(new THREE.Vector3(p.x, p.y + 14, p.z));
     }
     this._decorTracks(st, res.root);
+    decorateStation(this.festival, st, L, res);
     this.root.add(res.root);
     return { ...res, signals, lights };
   }
@@ -392,7 +394,7 @@ export class World {
     // so a constant number of lights is moved to the nearest station floodlights.
     const pts = this.stationLights.slice().sort((a, b) => a.distanceToSquared(focusPos) - b.distanceToSquared(focusPos));
     this.lightPool.forEach((l, i) => {
-      if (pts[i]) { l.position.copy(pts[i]); l.intensity = night * 260; } else l.intensity = 0;
+      if (pts[i]) { l.position.copy(pts[i]); l.intensity = night * 260 * (this.lampScale ?? 1); } else l.intensity = 0;
     });
   }
 

@@ -297,6 +297,7 @@ export class Operations {
       if (st.exam && st.exam.state !== 'done') return { aspect: 'RED', reason: 'Hot axle — stop for examination' };
       if (st.shunt && st.shunt.state !== 'done') return { aspect: 'RED', reason: 'Shunting in progress' };
       if (st.reversal && !st.engineChanged) return { aspect: 'RED' }; // engine must be changed first
+      if (st.tractionChange && !st.engineChanged) return { aspect: 'RED', reason: `Traction change: couple the ${st.tractionChange} first` };
       return { aspect: 'GREEN' };
     }
     return { aspect: 'GREEN' };
@@ -361,7 +362,7 @@ export class Operations {
 
   // ------------------------------------------------------------ dwell & halts
   mustWaitAt(st) {
-    return (st.exam && st.exam.state !== 'done') || (st.halt && !this.dwellDone(st)) || (st.reversal && !st.engineChanged) || (st.precedence && st.precedence.state !== 'cleared') || (this.crossings.get(st.index) && this.crossings.get(st.index).state !== 'cleared');
+    return (st.tractionChange && !st.engineChanged) || (st.exam && st.exam.state !== 'done') || (st.halt && !this.dwellDone(st)) || (st.reversal && !st.engineChanged) || (st.precedence && st.precedence.state !== 'cleared') || (this.crossings.get(st.index) && this.crossings.get(st.index).state !== 'cleared');
   }
 
   dwellLeft(st) {

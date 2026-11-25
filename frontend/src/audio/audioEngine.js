@@ -435,6 +435,23 @@ export class AudioEngine {
     this._click(t + 1.5, 0.35 * gain, true);
   }
 
+  // fog-signal detonators: two sharp bangs under the wheels
+  detonator() {
+    if (!this.ctx || !this.enabled) return;
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    for (const dt of [0, 0.32]) {
+      const t = t0 + dt;
+      const n = ctx.createBufferSource(); n.buffer = this.noiseBuf;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
+      const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.9, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      n.connect(lp).connect(g).connect(this.master); g.connect(this.reverb);
+      n.start(t, Math.random(), 0.4);
+      const o = ctx.createOscillator(); o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(35, t + 0.3);
+      const og = ctx.createGain(); og.gain.setValueAtTime(0.6, t); og.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      o.connect(og).connect(this.master); o.start(t); o.stop(t + 0.4);
+    }
+  }
+
   beep() {
     if (!this.ctx || !this.enabled) return;
     const t = this.ctx.currentTime;

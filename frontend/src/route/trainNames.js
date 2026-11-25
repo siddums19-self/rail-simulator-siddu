@@ -25,7 +25,7 @@ const MEDIUM = new Set(['GTL', 'KRNT', 'ATP', 'RC', 'BAY', 'HPT', 'NZB']);
 const CAPITALS = new Set(['SBC', 'SC', 'MAS', 'CSMT', 'HWH', 'ADI']);
 // Hub coordinates (as in the rail_hubs table): a pair only counts if the graph's route between
 // them is not a big detour — the graph is sparse, and e.g. Howrah - New Delhi must not run via Kurnool.
-const LATLON = { TPTY: [13.6288, 79.4192], HYB: [17.3924, 78.4678], RC: [16.2076, 77.3463], KRNT: [15.8281, 78.0373], GWD: [16.2336, 77.7985],
+export const LATLON = { TPTY: [13.6288, 79.4192], HYB: [17.3924, 78.4678], RC: [16.2076, 77.3463], KRNT: [15.8281, 78.0373], GWD: [16.2336, 77.7985],
   GTL: [15.1674, 77.3769], SC: [17.4344, 78.5013], SBC: [12.9781, 77.5697], NDLS: [28.6429, 77.2191], CSMT: [18.9398, 72.8355],
   MAS: [13.0827, 80.2757], BZA: [16.5186, 80.6199], VSKP: [17.7215, 83.2896], HWH: [22.5839, 88.3426], CBE: [10.9968, 76.9669],
   ADI: [23.0268, 72.6012], JP: [26.9196, 75.7878], WADI: [17.0472, 76.9922], DHNE: [15.3948, 77.8712], ATP: [14.6819, 77.6006],

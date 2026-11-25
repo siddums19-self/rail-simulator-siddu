@@ -1,3 +1,4 @@
+import { createPerson } from './people.js';
 import { RoadTraffic } from './vehicles.js';
 import * as THREE from 'three/webgpu';
 import { M, registerNightEmissive } from '../core/materials.js';
@@ -454,10 +455,18 @@ export class PropBuilder {
     // road traffic: queues at the gate while it is closed (gate posts at +-9 m from the track)
     const mid = frames.length >> 1, step = 8;
     const tr = new RoadTraffic(group, frames.map((f) => ({ x: f.x, y: f.y, z: f.z })), {
-      count: 6, rand, laneOff: 1.8,
+      count: 9, rand, laneOff: 1.8, mix: ['bike', 'bike', 'bike', 'bike', 'auto', 'auto', 'car', 'car', 'lorry', 'bus'], // two-wheelers queue at every LC
       stops: [{ d: mid * step - 11, closed: () => lcObj.closed > 0.05 }, { d: mid * step + 11, closed: () => lcObj.closed > 0.05 }]
     });
     (this.ctx.traffic ||= []).push(tr);
+    // people on foot waiting at the gates (some with bicycles / headloads), both sides of the line
+    for (const side of [-1, 1]) for (let k = 0; k < 3 + Math.floor(rand() * 4); k++) {
+      path.pointAt(s + (rand() < 0.5 ? -1 : 1) * (4.6 + rand() * 1.4), side * (12 + rand() * 6), _v);
+      const p = createPerson(Math.floor(rand() * 1e6));
+      p.position.set(_v.x, terrain.heightSL(s, side * 12, _v.x, _v.z) + 0.05, _v.z);
+      p.rotation.y = -th + (side > 0 ? Math.PI / 2 : -Math.PI / 2) + (rand() - 0.5) * 0.6;
+      group.add(p);
+    }
     path.pointAt(s - 12, -14, _v);
     const gy = terrain.heightSL(s - 12, -14, _v.x, _v.z);
     bat.box(M.plaster(0xe8dcc0), _v.x, gy + 1.4, _v.z, 3, 2.8, 3, -th);

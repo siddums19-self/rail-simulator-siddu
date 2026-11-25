@@ -21,6 +21,10 @@ import { SMWorld, SM_ROUTES } from './smWorld.js';
 import { SUBURBAN, suburbanPlan } from './route/suburban.js';
 import { Boarding } from './boarding.js';
 import { Multiplayer } from './multiplayer.js';
+import { CabRealism } from './cab.js';
+import { festivalToday, FESTIVAL_LABEL, Kites } from './world/festivals.js';
+import { Cattle } from './world/cattle.js';
+import { LATLON } from './route/trainNames.js';
 import { ControlRoom } from './control.js';
 import { WeatherOps } from './weather.js';
 import { planRunRound, RunRound } from './shunting.js';
@@ -147,6 +151,29 @@ const state = {
 let layout = null, world = null, consist = null, ops = null, traffic = null, timetable = null, scorer = null, incidents = null, weatherOps = null, control = null;
 const stationAudio = new StationAudio(audio);
 const boarding = new Boarding(scene);
+const kites = new Kites(scene), cattle = new Cattle(scene);
+state.festSel = 'AUTO';
+const festivalNow = () => (state.festSel === 'AUTO' ? festivalToday() : state.festSel === 'NONE' ? null : state.festSel);
+{ const _hs = audio.hornStart.bind(audio); audio.hornStart = (...a) => { state.lastHornS = state.sFront; return _hs(...a); }; }
+const nowMinutes = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+// Live weather for the route (Open-Meteo, keyed only by the route's station coordinates), mapped to the sim's
+// weather and the season: monsoon rain Jun-Oct, fog in winter mornings, summer haze when it is hot.
+async function liveWeather() {
+  const codes = layout?.stations.map((x) => x.code).filter((c) => LATLON[c]) || [];
+  const c = codes[Math.floor(codes.length / 2)];
+  if (!c) { toast('Live weather: no location for this route', 'warn', 2500); return; }
+  try {
+    const [la, lo] = LATLON[c];
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current=weather_code,temperature_2m,visibility`);
+    const j = (await r.json()).current, wc = j.weather_code, m = new Date().getMonth() + 1;
+    const w = (wc === 45 || wc === 48 || j.visibility < 1000) ? 'FOG' : (wc >= 51) ? 'MONSOON' : (j.temperature_2m > 35 || (m >= 4 && m <= 6 && j.temperature_2m > 32)) ? 'HAZE' : 'CLEAR';
+    state.weatherMode = null; state.weather = w;
+    weatherOps?.setWeather(w, state.sFront);
+    toast(`Live weather near ${layout.stations.find((x) => x.code === c)?.name || c}: ${Math.round(j.temperature_2m)}°C — ${{ FOG: 'fog', MONSOON: 'rain', HAZE: 'hot & hazy', CLEAR: 'clear' }[w]}`, 'ok', 4000);
+  } catch { toast('Live weather unavailable (offline?) — keeping the current weather', 'warn', 3000); }
+}
+const cab = new CabRealism({ audio, toast, el: document.getElementById('btn-vcd'),
+  onEmergency: (msg) => { state.emergency = true; state.notch = 0; state.auto = false; syncAuto(); toast(msg, 'warn', 5000); scorer?.add?.(-100, 'VCD not acknowledged'); } });
 let busy = false;
 
 function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
@@ -225,7 +252,9 @@ async function solveRoute(src, dst, via, allStops) {
 // ======================================================================
 // cont: continue the same journey after reversing at `src` (same platform, same loco, score, clock,
 // career run; the timetable carries on from the booked departure there).
-async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = false, minutes = null, stops = null, cont = null, trainNo = null, trainName = null, fixedPlan = null, sub = null }) {
+async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = false, minutes = null, stops = null, cont = null, trainNo = null, trainName = null, fixedPlan = null, sub = null, nightMail = null }) {
+  if (nightMail !== null) state.nightMail = nightMail;
+  if (state.nightMail && !cont && minutes === null) minutes = 23 * 60 + 30;
   if (busy) return;
   busy = true;
   loader.show();
@@ -242,6 +271,7 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
   }
   Object.assign(state, { src, dst, via, rakeType, allStops, stops, plan, speed: 0, notch: 0, brake: 0, emergency: false });
   boarding.stop(); boarding.st = null;
+  cab.reset(); state.nightHorns = 0;
   if (!cont) { state.journey = { src, dst, via, rakeType, allStops, stops, trainNo, trainName, fixedPlan, sub }; state.prevLegs = []; }
   if (minutes !== null) state.gameMinutes = minutes;
 
@@ -261,6 +291,15 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
     for (const st of layout.stations) if (!st.isOrigin && !st.isDest && !st.reversal && st.platforms >= 3) st.halt = true;
   }
   if (RAKES[rakeType].suburban) for (const st of layout.stations) if (!st.isOrigin && !st.isDest) { st.halt = true; st.dwellMin = Math.min(st.dwellMin || 1, 0.5); }
+  // Guntakal: an electric-hauled train going onto the Dhone line changes to a diesel (timed task, starter held)
+  const CREW = new Set(['GTL', 'SC', 'BZA', 'KZJ', 'NGP', 'UBL', 'KYN', 'BPL', 'ET', 'VSKP', 'BBS', 'DHN', 'MAS', 'SBC']);
+  layout.stations.forEach((st, i) => {
+    if (st.isOrigin || st.isDest || st.reversal) return;
+    if (st.code === 'GTL' && RAKES[rakeType].traction === 'electric' && !isMultipleUnit(rakeType) && layout.stations[i + 1]?.code === 'MKR') {
+      st.tractionChange = 'WDP4D'; st.halt = true; st.dwellMin = Math.max(st.dwellMin || 0, 10);
+    }
+    if (CREW.has(st.code) && st.halt && !RAKES[rakeType].suburban) { st.crewChange = true; st.dwellMin = Math.max(st.dwellMin || 0, 3); }
+  });
   const goods = !!RAKES[rakeType].goods;
   if (goods) { // goods trains run through: no passenger halts, only origin and destination yards
     for (const st of layout.stations) if (!st.isOrigin && !st.isDest && !st.reversal) st.halt = false;
@@ -269,6 +308,12 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
   if (state.journey?.trainNo) { ops.trainNo = state.journey.trainNo; ops.trainName = state.journey.trainName; }
   tm.push(performance.now());
   world = new World(scene, layout, { seedKey, density: Q.density });
+  world.lampScale = state.nightMail ? 0.3 : 1; // night mail: dim platform lighting
+  world.festival = festivalNow();
+  cattle.reset(state.sFront || 0);
+  if (state.liveTime && !cont && minutes === null) state.gameMinutes = nowMinutes();
+  if (state.liveWeather && !cont) setTimeout(liveWeather, 500);
+  if (world.festival && !cont) setTimeout(() => toast(`${FESTIVAL_LABEL[world.festival]} on the railway today!`, 'ok', 3500), 2500);
   ops.pointsMoving = (st) => world.pointsMovingAt(st);
   tm.push(performance.now());
   if (!cont) consist = new Consist(rakeType, { isPlayer: true, ...(goods ? { cars: RAKES[rakeType].wagons, loco: 'WAG9' } : {}) });
@@ -451,8 +496,8 @@ function updatePlatformPanel() {
 // Input
 // ======================================================================
 // Goods locos have a dynamic (regenerative) brake: notching below N0 gives DB1..DB4.
-function notch(d) { const lo = RAKES[state.rakeType].dynBrake ? -4 : 0; state.notch = Math.max(lo, Math.min(8, state.notch + d)); if (d > 0 && state.notch > 0) { state.brake = 0; state.emergency = false; } state.auto = false; syncAuto(); }
-function brake(d) { state.brake = Math.max(0, Math.min(100, state.brake + d)); if (d > 0 && state.notch > 0) state.notch = 0; state.auto = false; syncAuto(); }
+function notch(d) { cab.ack(); const lo = RAKES[state.rakeType].dynBrake ? -4 : 0; state.notch = Math.max(lo, Math.min(8, state.notch + d)); if (d > 0 && state.notch > 0) { state.brake = 0; state.emergency = false; } state.auto = false; syncAuto(); }
+function brake(d) { cab.ack(); state.brake = Math.max(0, Math.min(100, state.brake + d)); if (d > 0 && state.notch > 0) state.notch = 0; state.auto = false; syncAuto(); }
 function setPanto(up, quiet = false) {
   if (state.panto === up) return;
   state.panto = up;
@@ -487,6 +532,9 @@ $('inc-panel').onclick = (e) => { const b = e.target.closest('[data-act]'); if (
 $('btn-kavach').onclick = (e) => { state.kavach = !state.kavach; e.target.classList.toggle('on', state.kavach); toast(state.kavach ? 'Kavach ATP ON — automatic braking for red signals & overspeed' : 'Kavach ATP OFF — you are responsible for signals; SPADs can cause collisions', state.kavach ? 'ok' : 'warn', 3500); };
 $('btn-resume').onclick = () => resumeFromLastStation();
 $('btn-restart').onclick = () => { $('incident').style.display = 'none'; startRoute({ ...state.journey }); };
+$('btn-vcd').onclick = () => cab.ack();
+$('btn-calls').onclick = (e) => { cab.calls = !cab.calls; e.currentTarget.classList.toggle('on', cab.calls); };
+$('btn-vcdon').onclick = (e) => { cab.vcdOn = !cab.vcdOn; cab.ack(); e.currentTarget.classList.toggle('on', cab.vcdOn); };
 $('btn-menu').onclick = () => document.body.classList.toggle('menu-open'); // phones: toolbar folds away
 // Toolbar pop-ups (route planner, stops, timetable, caution, recorder): open just below the toolbar so they never
 // cover its buttons, have a close button, and only one is open at a time.
@@ -525,6 +573,8 @@ $('btn-reverse').onclick = () => {
   startRoute({ src: j.dst, dst: j.src, via: j.via.slice().reverse(), rakeType: j.rakeType, allStops: j.allStops });
 };
 $('sel-weather').onchange = (e) => {
+  if (e.target.value === 'LIVE') { state.liveWeather = true; liveWeather(); return; }
+  state.liveWeather = false;
   if (e.target.value === 'DYNAMIC') { state.weatherMode = 'DYNAMIC'; dynWeather.next = state.gameMinutes + 8; toast('Dynamic weather: it will change as the journey goes on', 'ok', 3000); return; }
   state.weatherMode = null;
   state.weather = e.target.value;
@@ -541,10 +591,17 @@ function showCautionOrder(always = false) {
   $('co-panel').style.display = 'block';
   $('co-ack').onclick = () => { $('co-panel').style.display = 'none'; };
 }
+$('sel-fest').onchange = (e) => {
+  state.festSel = e.target.value; if (world) world.festival = festivalNow();
+  const f = festivalNow(); toast(f ? `${FESTIVAL_LABEL[f]} — decorations appear at the stations ahead` : 'No festival decorations', 'ok', 3000);
+};
 $('sel-time').onchange = (e) => {
   if (e.target.value) {
-    const d = Number(e.target.value) - state.gameMinutes;
-    state.gameMinutes = Number(e.target.value);
+    state.liveTime = e.target.value === 'LIVE';
+    const to = state.liveTime ? nowMinutes() : Number(e.target.value);
+    if (state.liveTime) { state.simRate = 1; if ($('sel-rate')) $('sel-rate').value = '1'; toast('Live time: the sim clock now runs with your real clock', 'ok', 3000); }
+    const d = to - state.gameMinutes;
+    state.gameMinutes = to;
     if (timetable) timetable.shift(d); // a time jump moves the whole timetable with it
   }
   e.target.value = '';
@@ -979,7 +1036,7 @@ $('btn-solve').onclick = async () => {
   if (await mpTakeRoute({ src: $('sel-src').value, dst: $('sel-dst').value, via: $('sel-via').value ? $('sel-via').value.split(',').map((x) => x.trim()).filter(Boolean) : [], rakeType: $('sel-rake').value, allStops: $('sel-rake').value === 'DEMU_PASSENGER' })) return;
   const via = $('sel-via').value ? $('sel-via').value.split(',').map((s) => s.trim()).filter(Boolean) : [];
   $('route-modal').style.display = 'none';
-  startRoute({ src: $('sel-src').value, dst: $('sel-dst').value, via, rakeType: $('sel-rake').value, allStops: $('sel-rake').value === 'DEMU_PASSENGER' });
+  startRoute({ src: $('sel-src').value, dst: $('sel-dst').value, via, rakeType: $('sel-rake').value, allStops: $('sel-rake').value === 'DEMU_PASSENGER', nightMail: $('chk-night').checked });
 };
 $('sel-roster').onchange = async (e) => {
   const r = state.rosters[Number(e.target.value)];
@@ -1038,7 +1095,8 @@ window.addEventListener('keydown', async (e) => {
     case 'Space': e.preventDefault(); brake(25); break;
     case 'KeyR': state.brake = 0; state.emergency = false; break;
     case 'KeyE': $('btn-emg').click(); break;
-    case 'KeyH': audio.hornStart(); break;
+    case 'KeyH': audio.hornStart(); cab.ack(); if (state.nightMail && layout?.stationAt(state.sFront, 400)) state.nightHorns = (state.nightHorns || 0) + 1; break;
+    case 'KeyB': cab.ack(); break;
     case 'KeyA': $('btn-auto').click(); break;
     case 'KeyC': rig.setMode(rig.mode + 1); camSel.value = String(rig.mode); break;
     default:
@@ -1497,6 +1555,19 @@ renderer.setAnimationLoop(() => {
   const nsig = ops.signalsAhead(state.sFront, 1)[0];
   weatherOps.update(dt, { sFront: state.sFront, prevFront, speed: state.speed, trainLen: consist.length, nextSignalDist: nsig ? nsig.s - state.sFront : null });
   consist.place(layout.path, ops.lane, state.sFront, 1);
+  if (state.auto) cab.ack(); // the auto driver acknowledges the VCD
+  {
+    const sub = RAKES[state.rakeType].suburban;
+    const rural = (sv) => !sub && !layout.stations.some((x) => sv > x.layout.zoneStart - 1500 && sv < x.layout.zoneEnd + 1500);
+    cattle.update(dt, { sFront: state.sFront, layout, lane: ops.lane, rural, lastHornS: state.lastHornS ?? -1e9, speed: state.speed, enabled: true,
+      onHit: (v) => { audio.crash(Math.min(0.5, 0.15 + v / 60)); toast(`🐄 Cattle run-over at ${Math.round(v * 3.6)} km/h — sound the horn early on rural sections`, 'warn', 4500); scorer?.add?.(-150, 'Cattle run-over'); } });
+    const stNear = layout.stations.reduce((b, x) => (Math.abs(x.layout.sCenter - state.sFront) < Math.abs((b?.layout.sCenter ?? 1e12) - state.sFront) ? x : b), null);
+    const kp = consist.vehicles[0].group.getWorldPosition(new THREE.Vector3());
+    kites.update(dt, world.festival === 'SANKRANTI' && Kites.region(stNear), kp);
+  }
+  cab.update(rawDt, { speedKmh: state.speed * 3.6, sFront: state.sFront, prevFront, ops, layout, weather: state.weather, stopped: state.speed < 0.3 });
+  // crew change at the big junctions: announced once when we stand there
+  if (state.haltedAt?.crewChange && !state.haltedAt.crewAnnounced) { state.haltedAt.crewAnnounced = true; toast(`👥 Crew change at ${state.haltedAt.name}: loco pilot & assistant signing off, new crew booking on (${state.haltedAt.dwellMin} min)`, 'ok', 4500); }
   // doors open and passengers get off / board while standing at a halt; doors shut as we move off
   {
     const stH = layout.stationAt(state.sFront);
@@ -1666,7 +1737,8 @@ function nearestPassing() {
 // ---- engine change / reversal
 function updateEnginePanel() {
   const st = state.haltedAt;
-  const show = st && state.speed < 0.3 && !state.engineChange && !state.reversing && !st.isDest && (st.reversal || st.category !== 'station') && !(st.engineChanged && !st.reversal);
+  const show = st && state.speed < 0.3 && !state.engineChange && !state.reversing && !st.isDest && (st.reversal || st.tractionChange || st.category !== 'station') && !(st.engineChanged && !st.reversal);
+  if (show && st.tractionChange && !st._tcShown) { st._tcShown = true; $('engine-select').value = st.tractionChange; toast(`⚙ Traction change at ${st.name}: cut off the electric loco and couple the ${st.tractionChange} for the Dhone line — the starter stays red until it is done`, 'warn', 6000); }
   const panel = $('engine-panel');
   panel.style.display = show ? 'block' : 'none';
   if (!show) return;
@@ -1875,6 +1947,10 @@ function showSummary() {
   $('sum-events').innerHTML = scorer.events.slice(-20).reverse().map((e) => `<div>${e.pts > 0 ? '+' : ''}${e.pts} · ${e.why}</div>`).join('');
   const comfort = scorer.comfort, punct = Math.max(0, 100 - Math.max(0, late - 1) * 6);
   const stars = Math.max(1, Math.min(5, Math.round(((comfort * 0.5 + punct * 0.5) / 100) * 5 - ops.spads)));
+  if (state.nightMail) {
+    const sleep = Math.max(1, 5 - (comfort < 95 ? 1 : 0) - (comfort < 85 ? 1 : 0) - Math.min(2, Math.floor((state.nightHorns || 0) / 3)) - (late > 5 ? 1 : 0) - ops.spads);
+    $('sum-stats').insertAdjacentHTML('afterbegin', `<div><span class="muted">🌙 Sleeping passengers</span><b style="color:#a5b4fc;">${'★'.repeat(sleep)}${'☆'.repeat(5 - sleep)}</b></div>`);
+  }
   $('sum-stats').insertAdjacentHTML('afterbegin', `<div><span class="muted">Passenger rating</span><b style="color:#facc15;">${'★'.repeat(stars)}${'☆'.repeat(5 - stars)}</b></div>`);
   const cr = finishCareerRun({ completed: true, late });
   if (state.daily) { account.recordGame({ mode: 'daily', venue: state.daily.key, score: scorer.total(), trains: 1, avgDelay: late }); achievements({ kind: 'daily' }); state.daily = null; }
