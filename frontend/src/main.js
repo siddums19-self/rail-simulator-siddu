@@ -452,8 +452,27 @@ function buildStripMap() {
 // Platform selector
 // ======================================================================
 let pfShownFor = null, pfLockedShown = false;
+// next station ahead with more than one line whose home signal we have not passed (for the T key / button)
+function nextSelectable() {
+  for (const st of layout.stations) if (!st.isOrigin && ops.homeS(st) + 20 > state.sFront && !ops.locked.has(st.index)) return st.layout.tracks.length > 1 ? st : null;
+  return null;
+}
+function trackSwitch(cycle) {
+  const st = nextSelectable();
+  if (!st) { toast('No station ahead with a choice of lines (or the route is already locked)', 'warn', 2200); return; }
+  if (!cycle || state.pfForce !== st.index) { state.pfForce = st.index; pfShownFor = null; toast(`${st.name}: choose a platform / loop — press T again to step through the free lines`, 'ok', 2600); return; }
+  const lines = st.layout.tracks.filter((t) => !st.occupancy.get(t.no) && ops.usable(st, t));
+  if (!lines.length) { toast(`All lines at ${st.name} are occupied`, 'warn'); return; }
+  const cur = ops.choices.get(st.index), i = lines.findIndex((t) => t.no === cur);
+  const t = lines[(i + 1) % lines.length];
+  const res = ops.choose(st, t.no);
+  if (res === 'ok') toast(`Points throwing — route set: ${st.name} ${t.name}${t.pf ? '' : ' (no platform)'}${t.isThrough ? '' : ` · loop ${LOOP_LIMIT} km/h`}`, st.halt && !t.pf ? 'warn' : 'ok', 2400);
+  else if (res === 'forced') toast(`Precedence: control has set ${ops.trackOf(st).name} so ${st.precedence.train.name} can overtake`, 'warn', 3000);
+  pfShownFor = null;
+}
 function updatePlatformPanel() {
-  const st = ops.selectorStation(state.sFront, state.speed);
+  let st = ops.selectorStation(state.sFront, state.speed);
+  if (!st && state.pfForce != null) { const f = nextSelectable(); if (f && f.index === state.pfForce) st = f; else state.pfForce = null; }
   const panel = $('pf-panel');
   if (!st) { panel.style.display = 'none'; pfShownFor = null; return; }
   panel.style.display = 'block';
@@ -489,7 +508,7 @@ function updatePlatformPanel() {
     };
     list.appendChild(div);
   }
-  $('pf-lock').textContent = locked ? 'Route locked (home signal passed).' : 'Pick any FREE line before the home signal.';
+  $('pf-lock').textContent = locked ? 'Route locked (home signal passed).' : 'Pick any FREE line before the home signal · T steps through them.';
 }
 
 // ======================================================================
@@ -533,7 +552,7 @@ $('btn-kavach').onclick = (e) => { state.kavach = !state.kavach; e.target.classL
 $('btn-resume').onclick = () => resumeFromLastStation();
 $('btn-restart').onclick = () => { $('incident').style.display = 'none'; startRoute({ ...state.journey }); };
 $('btn-vcd').onclick = () => cab.ack();
-$('btn-calls').onclick = (e) => { cab.calls = !cab.calls; e.currentTarget.classList.toggle('on', cab.calls); };
+$('btn-track').onclick = () => trackSwitch(true);
 $('btn-vcdon').onclick = (e) => { cab.vcdOn = !cab.vcdOn; cab.ack(); e.currentTarget.classList.toggle('on', cab.vcdOn); };
 $('btn-menu').onclick = () => document.body.classList.toggle('menu-open'); // phones: toolbar folds away
 // Toolbar pop-ups (route planner, stops, timetable, caution, recorder): open just below the toolbar so they never
@@ -1097,6 +1116,7 @@ window.addEventListener('keydown', async (e) => {
     case 'KeyE': $('btn-emg').click(); break;
     case 'KeyH': audio.hornStart(); cab.ack(); if (state.nightMail && layout?.stationAt(state.sFront, 400)) state.nightHorns = (state.nightHorns || 0) + 1; break;
     case 'KeyB': cab.ack(); break;
+    case 'KeyT': trackSwitch(true); break;
     case 'KeyA': $('btn-auto').click(); break;
     case 'KeyC': rig.setMode(rig.mode + 1); camSel.value = String(rig.mode); break;
     default:
