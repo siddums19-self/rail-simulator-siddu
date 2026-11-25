@@ -132,8 +132,6 @@
     .sec-card button.on, .sec-card button.go { background: #15803d; border-color: #22c55e; } .sec-card button.go { font-weight: 700; }
     /* ---------- phones & tablets (body.mobile is set from the device and screen size) ---------- */
     .mobile-only { display: none; }
-    #btn-vcd.show { background: #b45309; border-color: #fbbf24; animation: vcdblink .5s steps(2) infinite; }
-    @keyframes vcdblink { 50% { background: #78350f; } }
     #mp-panel { position: fixed; right: 12px; top: 200px; width: 290px; z-index: 22; display: none; font-size: 12px; }
     #mp-table { width: 100%; border-collapse: collapse; margin-top: 6px; } #mp-table td { padding: 3px 4px; border-bottom: 1px solid #1f2a3d; }
     #mp-table tr.me td { color: #fde047; }
@@ -365,7 +363,6 @@
         <button id="btn-incidents" class="on tog" data-i="⚡" title="Random breakdowns and incidents, each with its real procedure">Incidents</button>
         <button id="btn-derail" class="tog" data-i="💥" title="Realistic derailment on gross overspeed over points and curves (off = penalty + heavy lurch only)">Derail: off</button>
         <button id="btn-lights" class="tog" data-i="💡" title="Headlight: Auto (dark / fog / rain), On or Off — key L">Lights: Auto</button>
-        <button id="btn-vcdon" class="on tog" data-i="⏱" title="Vigilance control device: acknowledge every 60 s or the brakes apply">VCD</button>
         <button id="btn-wipers" class="tog" data-i="🌧" title="Windscreen wipers: Auto (rain), On or Off — key I">Wipers: Auto</button>
       </div>
       <div class="tb-group"><span class="tb-h">Profile</span>
@@ -693,8 +690,6 @@
         <button id="btn-brk">Brake (Space)</button>
         <button id="btn-rel">Release (R)</button>
         <button id="btn-emg" style="background:#7f1d1d;border-color:#ef4444;">EMG (E)</button>
-        <button id="btn-track" title="Choose the platform / loop at the next station (key T)">Platform (T)</button>
-        <button id="btn-vcd" title="Vigilance control device: acknowledge every 60 s while running (key B)">VCD (B)</button>
         <button id="horn-btn">HORN (H)</button>
         <button id="btn-panto" class="on" title="Raise / lower the pantograph (P)">Panto: up</button>
       </div>

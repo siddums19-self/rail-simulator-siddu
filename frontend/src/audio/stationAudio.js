@@ -164,16 +164,22 @@ export class StationAudio {
 
   // Local-language repeat (browser voices). Falls back to Hindi when the device has no voice for
   // the station's language; skipped if it has neither.
-  _speakLocal(local, female, gen) {
-    if (!local || !this.localLang || gen !== (this.gen || 0)) return;
-    if (!('speechSynthesis' in window) || !this.audio.enabled || !this.audio.announcements) return;
+  _speakLocal(local, female, gen, done = () => {}) {
+    if (!local || !this.localLang || gen !== (this.gen || 0)) { done(); return; }
+    if (!this.audio.enabled || !this.audio.announcements) { done(); return; }
+    if (this.voiceMode === 'cloud' && !(this.cloudDownUntil > performance.now())) {
+      setTimeout(() => { if (gen === (this.gen || 0)) this._cloudSay(local.text, female, gen, done, `${local.lang.slice(0, 2)}-IN`, true); else done(); }, 600);
+      return;
+    }
+    if (!('speechSynthesis' in window)) { done(); return; }
     const voices = speechSynthesis.getVoices();
     const want = local.lang.slice(0, 2);
     let voice = voices.find((v) => v.lang.toLowerCase().startsWith(want) && /natural|neural|online|premium|enhanced/i.test(v.name)) || voices.find((v) => v.lang.toLowerCase().startsWith(want));
-    if (!voice) return;
+    if (!voice) { done(); return; }
     const u = new SpeechSynthesisUtterance(local.text);
     u.voice = voice; u.lang = voice.lang; u.rate = 0.92; u.volume = this.paVolume ?? 0.4; u.pitch = female ? 1.05 : 0.95;
-    setTimeout(() => { if (gen === (this.gen || 0)) speechSynthesis.speak(u); }, 700);
+    u.onend = done; u.onerror = done;
+    setTimeout(() => { if (gen === (this.gen || 0)) speechSynthesis.speak(u); else done(); }, 700);
   }
 
   // Announcements tied to real train movements at this station, phrased the way
@@ -199,6 +205,7 @@ export class StationAudio {
     this.nextAnnounce = 6;
     this._queueBusy = false;
     this.welcomed = new Set();
+    this._talkUntil = 0;
     this.stopSpeech();
   }
 
@@ -207,13 +214,25 @@ export class StationAudio {
   say(text, female = true, localInfo = null) {
     const gen = this.gen || 0;
     const local = localInfo?.text ? localInfo : localAnnouncement(localInfo);
-    const after = () => this._speakLocal(local, female, gen);
+    if (this.busy()) { // wait for the announcement in progress to finish (our own train's arrival first in line)
+      (this.queue ||= []).unshift({ text, local: localInfo, st: this.lastStation, at: performance.now() });
+      return false;
+    }
+    this._talkUntil = performance.now() + 40000;               // safety: never blocked for more than 40 s
+    const done = () => { this._talkUntil = 0; };
+    const after = () => this._speakLocal(local, female, gen, done);
     this.audio.stationChime(null, this.paVolume ?? 0.38, !!this.interior); // chime at the announcer's level
     setTimeout(() => {
       if (gen !== (this.gen || 0)) return;
       if (this.voiceMode === 'cloud' && !(this.cloudDownUntil > performance.now())) { this._cloudSay(text, female, gen, after); return; }
-      if (!this._speak(text, { female, onend: after })) setTimeout(() => { if (gen === (this.gen || 0)) this._speak(text, { female, onend: after }); }, 4000);
-    }, 1450); // the chime (~1.3 s), then the voice
+      if (!this._speak(text, { female, onend: after })) setTimeout(() => { if (gen === (this.gen || 0)) { if (!this._speak(text, { female, onend: after })) done(); } else done(); }, 4000);
+    }, 1450);
+    return true;
+  }
+
+  // an announcement (chime, English, local repeat) is in progress
+  busy() {
+    return (this._talkUntil || 0) > performance.now() || this.cloudBusy || !!(window.speechSynthesis?.speaking || window.speechSynthesis?.pending); // the chime (~1.3 s), then the voice
   }
 
   // Station PA loudspeakers heard from a distance: telephone-band speaker tone,
@@ -238,21 +257,21 @@ export class StationAudio {
     return this.paIn;
   }
 
-  async _cloudSay(text, female, gen, after = null) {
+  async _cloudSay(text, female, gen, after = null, lang = null, localRepeat = false) {
     const a = this.audio;
     if (!a.ctx || !a.enabled || !a.announcements) return;
-    const key = (female ? 'f|' : 'm|') + text;
+    const key = (female ? 'f|' : 'm|') + (lang || '') + text;
     this.cloudCache ||= new Map();
     try {
       this.cloudBusy = true;
       let buf = this.cloudCache.get(key);
       if (!buf) {
-        const r = await fetch(`${API_BASE}/tts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, gender: female ? 'female' : 'male' }) });
+        const r = await fetch(`${API_BASE}/tts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, gender: female ? 'female' : 'male', lang }) });
         if (!r.ok) throw new Error(`TTS ${r.status}`);
         buf = await a.ctx.decodeAudioData(await r.arrayBuffer());
         this.cloudCache.set(key, buf);
       }
-      if (gen !== (this.gen || 0)) { this.cloudBusy = false; return; }
+      if (gen !== (this.gen || 0)) { this.cloudBusy = false; after?.(); return; }
       const src = a.ctx.createBufferSource(); src.buffer = buf;
       src.connect(this._paChain());
       this.paOut.gain.setValueAtTime(this.paLevel ?? 0.3, a.ctx.currentTime);
@@ -264,7 +283,8 @@ export class StationAudio {
       this.cloudBusy = false;
       this.cloudDownUntil = performance.now() + 120000;
       this.onCloudFail?.(e.message);
-      this._speak(text, { female, onend: after });
+      if (localRepeat) { after?.(); return; }              // the local repeat is skipped rather than spoken by a wrong voice
+      if (!this._speak(text, { female, onend: after })) after?.();
     }
   }
 
@@ -324,7 +344,7 @@ export class StationAudio {
     if (this.paOut) this.paOut.gain.setTargetAtTime(this.cloudSrc ? this.paLevel : this.paOut.gain.value, a.ctx.currentTime, 0.4);
     // station announcements belong to that station: drop them once we are away from it
     if (this.queue) this.queue = this.queue.filter((q) => q.st === st && prox >= 0.3 && performance.now() - q.at < 90000);
-    if (this.queue && this.queue.length && !(window.speechSynthesis?.speaking || window.speechSynthesis?.pending) && !this.cloudBusy && !this._queueBusy) {
+    if (this.queue && this.queue.length && !this.busy() && !this._queueBusy) {
       this._queueBusy = true;
       const q = this.queue.shift();
       this.say(q.text, true, q.local);
@@ -339,7 +359,7 @@ export class StationAudio {
     }
     if (this.lastStation !== st) { this.lastStation = st; this.nextAnnounce = 4 + Math.random() * 4; }
     this.nextAnnounce -= dt;
-    if (this.nextAnnounce <= 0 && !this.cloudBusy && (st.halt || st.category !== 'station')) {
+    if (this.nextAnnounce <= 0 && !this.busy() && (st.halt || st.category !== 'station')) {
       const a = this._announcement(ctx);
       const female = (this._announcer++ % 3) !== 2; // mostly the female announcer, sometimes male
       if (a) this.say(a.text, female, a.local);

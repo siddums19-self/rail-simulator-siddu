@@ -6,8 +6,8 @@ import { makeRng } from '../core/rng.js';
 
 // Festivals, picked from the real date (or chosen in the settings):
 //   Diwali            - strings of coloured bulbs along the platforms and diyas on the platform edge (everywhere)
-//   Ganesh Chaturthi  - extra crowds and a marigold-decked pandal on Mumbai-area platforms
-//   Makar Sankranti   - kites over the line in Andhra Pradesh / Telangana
+//   Ganesh Chaturthi  - extra crowds and a marigold-decked pandal at every station (biggest in Mumbai)
+//   Makar Sankranti   - kites over the line everywhere
 const DATES = { // [month(1-12), day, days] start of the festival window
   2025: { DIWALI: [10, 18, 6], GANESH: [8, 27, 11], SANKRANTI: [1, 12, 5] },
   2026: { DIWALI: [11, 5, 6], GANESH: [9, 14, 11], SANKRANTI: [1, 12, 5] },
@@ -64,12 +64,12 @@ export function decorateStation(fest, st, L, res) {
       res.root.add(im);
     }
   }
-  if (fest === 'GANESH' && MUMBAI.test(st.code)) {
+  if (fest === 'GANESH') { // every station (biggest crowds in Mumbai)
     // festival crowds: many more people waiting on every platform, and a small pandal with marigold strings
     const marigold = new THREE.MeshStandardMaterial({ color: 0xff9800, emissive: 0xff6d00, emissiveIntensity: 0.3 });
     for (const t of S.tracks) {
       const lat = t.o + (t.pfSide === 'left' ? -3.6 : 3.6);
-      for (let n = 0; n < 34; n++) {
+      for (let n = 0, N = MUMBAI.test(st.code) ? 34 : 16; n < N; n++) {
         const sv = S.pStart + 10 + rand() * (S.pLen - 20);
         const mesh = createPerson(Math.floor(rand() * 1e6));
         path.pointAt(sv, lat + (rand() - 0.5) * 3, v);
@@ -117,5 +117,5 @@ export class Kites {
       k.m.rotation.set(Math.sin(k.ph * 1.1) * 0.35, k.a, Math.sin(k.ph * 0.9) * 0.4);
     }
   }
-  static region(st) { return st && localLang(st.code) === 'te'; }
+  static region() { return true; } // kites over the line everywhere
 }

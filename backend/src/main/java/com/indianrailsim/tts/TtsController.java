@@ -61,7 +61,7 @@ public class TtsController {
         this.quotaProject = quotaProject;
     }
 
-    public record TtsRequest(String text, String gender) {}
+    public record TtsRequest(String text, String gender, String lang) {}
 
     @GetMapping("/status")
     public Map<String, Object> status() {
@@ -78,7 +78,9 @@ public class TtsController {
         String text = req.text().strip();
         if (text.length() > MAX_TEXT) text = text.substring(0, MAX_TEXT);
         boolean male = "male".equalsIgnoreCase(req.gender());
-        String voice = male ? maleVoice : femaleVoice;
+        // lang: local-language repeat (te-IN, kn-IN, ta-IN, hi-IN, mr-IN, ...); Google picks that language's voice
+        String lang = req.lang() == null || !req.lang().matches("[a-z]{2}-IN") ? null : req.lang();
+        String voice = lang != null ? lang + (male ? "|MALE" : "|FEMALE") : male ? maleVoice : femaleVoice;
         String key = voice + "|" + text;
         byte[] cached = cache.get(key);
         if (cached != null) return audio(cached);
@@ -121,8 +123,11 @@ public class TtsController {
         if (creds == null) throw new IOException(lastError);
         creds.refreshIfExpired();
         String token = creds.getAccessToken().getTokenValue();
+        String voiceJson = voice.contains("|")
+                ? "{\"languageCode\":" + json(voice.substring(0, voice.indexOf('|'))) + ",\"ssmlGender\":" + json(voice.substring(voice.indexOf('|') + 1)) + "}"
+                : "{\"languageCode\":\"en-IN\",\"name\":" + json(voice) + "}";
         String body = "{\"input\":{\"text\":" + json(text) + "},"
-                + "\"voice\":{\"languageCode\":\"en-IN\",\"name\":" + json(voice) + "},"
+                + "\"voice\":" + voiceJson + ","
                 + "\"audioConfig\":{\"audioEncoding\":\"MP3\",\"speakingRate\":0.94,\"sampleRateHertz\":24000}}";
         HttpRequest.Builder rb = HttpRequest.newBuilder(URI.create(ENDPOINT))
                 .timeout(Duration.ofSeconds(15))

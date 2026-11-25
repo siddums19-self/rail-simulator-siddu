@@ -172,8 +172,7 @@ async function liveWeather() {
     toast(`Live weather near ${layout.stations.find((x) => x.code === c)?.name || c}: ${Math.round(j.temperature_2m)}°C — ${{ FOG: 'fog', MONSOON: 'rain', HAZE: 'hot & hazy', CLEAR: 'clear' }[w]}`, 'ok', 4000);
   } catch { toast('Live weather unavailable (offline?) — keeping the current weather', 'warn', 3000); }
 }
-const cab = new CabRealism({ audio, toast, el: document.getElementById('btn-vcd'),
-  onEmergency: (msg) => { state.emergency = true; state.notch = 0; state.auto = false; syncAuto(); toast(msg, 'warn', 5000); scorer?.add?.(-100, 'VCD not acknowledged'); } });
+const cab = new CabRealism({ audio, toast });
 let busy = false;
 
 function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
@@ -452,27 +451,8 @@ function buildStripMap() {
 // Platform selector
 // ======================================================================
 let pfShownFor = null, pfLockedShown = false;
-// next station ahead with more than one line whose home signal we have not passed (for the T key / button)
-function nextSelectable() {
-  for (const st of layout.stations) if (!st.isOrigin && ops.homeS(st) + 20 > state.sFront && !ops.locked.has(st.index)) return st.layout.tracks.length > 1 ? st : null;
-  return null;
-}
-function trackSwitch(cycle) {
-  const st = nextSelectable();
-  if (!st) { toast('No station ahead with a choice of lines (or the route is already locked)', 'warn', 2200); return; }
-  if (!cycle || state.pfForce !== st.index) { state.pfForce = st.index; pfShownFor = null; toast(`${st.name}: choose a platform / loop — press T again to step through the free lines`, 'ok', 2600); return; }
-  const lines = st.layout.tracks.filter((t) => !st.occupancy.get(t.no) && ops.usable(st, t));
-  if (!lines.length) { toast(`All lines at ${st.name} are occupied`, 'warn'); return; }
-  const cur = ops.choices.get(st.index), i = lines.findIndex((t) => t.no === cur);
-  const t = lines[(i + 1) % lines.length];
-  const res = ops.choose(st, t.no);
-  if (res === 'ok') toast(`Points throwing — route set: ${st.name} ${t.name}${t.pf ? '' : ' (no platform)'}${t.isThrough ? '' : ` · loop ${LOOP_LIMIT} km/h`}`, st.halt && !t.pf ? 'warn' : 'ok', 2400);
-  else if (res === 'forced') toast(`Precedence: control has set ${ops.trackOf(st).name} so ${st.precedence.train.name} can overtake`, 'warn', 3000);
-  pfShownFor = null;
-}
 function updatePlatformPanel() {
-  let st = ops.selectorStation(state.sFront, state.speed);
-  if (!st && state.pfForce != null) { const f = nextSelectable(); if (f && f.index === state.pfForce) st = f; else state.pfForce = null; }
+  const st = ops.selectorStation(state.sFront, state.speed);
   const panel = $('pf-panel');
   if (!st) { panel.style.display = 'none'; pfShownFor = null; return; }
   panel.style.display = 'block';
@@ -508,15 +488,15 @@ function updatePlatformPanel() {
     };
     list.appendChild(div);
   }
-  $('pf-lock').textContent = locked ? 'Route locked (home signal passed).' : 'Pick any FREE line before the home signal · T steps through them.';
+  $('pf-lock').textContent = locked ? 'Route locked (home signal passed).' : 'Pick any FREE line before the home signal';
 }
 
 // ======================================================================
 // Input
 // ======================================================================
 // Goods locos have a dynamic (regenerative) brake: notching below N0 gives DB1..DB4.
-function notch(d) { cab.ack(); const lo = RAKES[state.rakeType].dynBrake ? -4 : 0; state.notch = Math.max(lo, Math.min(8, state.notch + d)); if (d > 0 && state.notch > 0) { state.brake = 0; state.emergency = false; } state.auto = false; syncAuto(); }
-function brake(d) { cab.ack(); state.brake = Math.max(0, Math.min(100, state.brake + d)); if (d > 0 && state.notch > 0) state.notch = 0; state.auto = false; syncAuto(); }
+function notch(d) { const lo = RAKES[state.rakeType].dynBrake ? -4 : 0; state.notch = Math.max(lo, Math.min(8, state.notch + d)); if (d > 0 && state.notch > 0) { state.brake = 0; state.emergency = false; } state.auto = false; syncAuto(); }
+function brake(d) { state.brake = Math.max(0, Math.min(100, state.brake + d)); if (d > 0 && state.notch > 0) state.notch = 0; state.auto = false; syncAuto(); }
 function setPanto(up, quiet = false) {
   if (state.panto === up) return;
   state.panto = up;
@@ -551,9 +531,6 @@ $('inc-panel').onclick = (e) => { const b = e.target.closest('[data-act]'); if (
 $('btn-kavach').onclick = (e) => { state.kavach = !state.kavach; e.target.classList.toggle('on', state.kavach); toast(state.kavach ? 'Kavach ATP ON — automatic braking for red signals & overspeed' : 'Kavach ATP OFF — you are responsible for signals; SPADs can cause collisions', state.kavach ? 'ok' : 'warn', 3500); };
 $('btn-resume').onclick = () => resumeFromLastStation();
 $('btn-restart').onclick = () => { $('incident').style.display = 'none'; startRoute({ ...state.journey }); };
-$('btn-vcd').onclick = () => cab.ack();
-$('btn-track').onclick = () => trackSwitch(true);
-$('btn-vcdon').onclick = (e) => { cab.vcdOn = !cab.vcdOn; cab.ack(); e.currentTarget.classList.toggle('on', cab.vcdOn); };
 $('btn-menu').onclick = () => document.body.classList.toggle('menu-open'); // phones: toolbar folds away
 // Toolbar pop-ups (route planner, stops, timetable, caution, recorder): open just below the toolbar so they never
 // cover its buttons, have a close button, and only one is open at a time.
@@ -1114,9 +1091,8 @@ window.addEventListener('keydown', async (e) => {
     case 'Space': e.preventDefault(); brake(25); break;
     case 'KeyR': state.brake = 0; state.emergency = false; break;
     case 'KeyE': $('btn-emg').click(); break;
-    case 'KeyH': audio.hornStart(); cab.ack(); if (state.nightMail && layout?.stationAt(state.sFront, 400)) state.nightHorns = (state.nightHorns || 0) + 1; break;
-    case 'KeyB': cab.ack(); break;
-    case 'KeyT': trackSwitch(true); break;
+    case 'KeyH': audio.hornStart(); if (state.nightMail && layout?.stationAt(state.sFront, 400)) state.nightHorns = (state.nightHorns || 0) + 1; break;
+    case 'KeyB': break;
     case 'KeyA': $('btn-auto').click(); break;
     case 'KeyC': rig.setMode(rig.mode + 1); camSel.value = String(rig.mode); break;
     default:
@@ -1575,7 +1551,6 @@ renderer.setAnimationLoop(() => {
   const nsig = ops.signalsAhead(state.sFront, 1)[0];
   weatherOps.update(dt, { sFront: state.sFront, prevFront, speed: state.speed, trainLen: consist.length, nextSignalDist: nsig ? nsig.s - state.sFront : null });
   consist.place(layout.path, ops.lane, state.sFront, 1);
-  if (state.auto) cab.ack(); // the auto driver acknowledges the VCD
   {
     const sub = RAKES[state.rakeType].suburban;
     const rural = (sv) => !sub && !layout.stations.some((x) => sv > x.layout.zoneStart - 1500 && sv < x.layout.zoneEnd + 1500);
