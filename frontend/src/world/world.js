@@ -25,7 +25,8 @@ const constLanes = new Map();
 const constLane = (v) => { if (!constLanes.has(v)) constLanes.set(v, new Lane(v)); return constLanes.get(v); };
 
 export class World {
-  constructor(scene, layout, { seedKey, density = 0.8 }) {
+  constructor(scene, layout, { seedKey, density = 0.8, lights = 4 }) {
+    this.lightCount = lights;
     this.scene = scene;
     this.layout = layout;
     this.seedKey = seedKey;
@@ -89,7 +90,7 @@ export class World {
     this.turnouts = new TurnoutManager(layout, this.root);
     this.lightPool = [];
     // warm sodium-vapour yard lights
-    for (let i = 0; i < 4; i++) { const l = new THREE.PointLight(0xffc27a, 0, 140, 1.4); this.scene.add(l); this.lightPool.push(l); }
+    for (let i = 0; i < this.lightCount; i++) { const l = new THREE.PointLight(0xffc27a, 0, 140, 1.4); this.scene.add(l); this.lightPool.push(l); }
   }
 
   // Intermediate block signals stream in/out like turnouts.

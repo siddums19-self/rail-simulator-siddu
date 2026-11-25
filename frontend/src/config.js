@@ -69,5 +69,6 @@ export const TRAFFIC_MIX = ['LHB', 'LHB', 'LHB', 'ICF', 'ICF', 'ICF', 'DEMU_PASS
 export const QUALITY = {
   ultra:  { pixelRatio: 2,   shadow: 4096, post: true,  samples: 4, density: 1.0 },
   high:   { pixelRatio: 1.5, shadow: 2048, post: true,  samples: 4, density: 0.8 },
-  medium: { pixelRatio: 1,   shadow: 1024, post: false, samples: 0, density: 0.5 }
+  medium: { pixelRatio: 1,   shadow: 1024, post: false, samples: 0, density: 0.5 },
+  low:    { pixelRatio: 0.75, shadow: 0,   post: false, samples: 0, density: 0.3, lights: 1 }
 };

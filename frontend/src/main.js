@@ -55,7 +55,8 @@ const params = new URLSearchParams(location.search);
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 // iPhone / iPad (any browser there is WebKit; iPadOS reports itself as a Mac with touch)
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-const isMobile = () => isIOS || (isTouch && Math.min(innerWidth, innerHeight) < 900);
+const isPhoneUA = /Android|Mobi|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.userAgentData?.mobile === true;
+const isMobile = () => isIOS || isPhoneUA; // real phones/tablets only, not touchscreen laptops
 const syncDevice = () => {
   document.body.classList.toggle('mobile', isMobile() || innerWidth < 760);
   document.body.classList.toggle('touch', isTouch);
@@ -64,18 +65,20 @@ const syncDevice = () => {
 syncDevice();
 addEventListener('resize', syncDevice);
 addEventListener('orientationchange', () => setTimeout(syncDevice, 200));
-let qualityKey = params.get('q') || localStorageGet('railsim.quality') || (isMobile() ? 'medium' : 'high');
-if (isIOS && qualityKey !== 'medium' && !params.get('q')) qualityKey = 'medium'; // iOS WebKit runs out of GPU memory above this
+let qualityKey = params.get('q') || localStorageGet('railsim.quality') || (isMobile() ? 'low' : 'high');
+// phones run out of GPU memory / hang above medium; ignore a stale saved 'high'/'ultra' unless forced via ?q=
+if (isMobile() && !params.get('q') && qualityKey !== 'low' && qualityKey !== 'medium') qualityKey = 'low';
 let Q = QUALITY[qualityKey] || QUALITY.high;
 
-const renderer = new THREE.WebGPURenderer({ antialias: !Q.post, powerPreference: 'high-performance', forceWebGL: params.has('webgl') || (isIOS && !params.has('webgpu')) });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, isIOS ? 1 : Q.pixelRatio));
+const renderer = new THREE.WebGPURenderer({ antialias: !Q.post, powerPreference: 'high-performance', forceWebGL: params.has('webgl') || (isMobile() && !params.has('webgpu')) });
+const maxDpr = () => (isMobile() ? Math.min(1, Q.pixelRatio) : Q.pixelRatio);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxDpr()));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.domElement.style.touchAction = 'none';
 renderer.toneMapping = THREE.NeutralToneMapping; // ACES crushed contrast and greyed the colours
 renderer.toneMappingExposure = 0.65;
 renderer.exposureScale = 1.18;                    // the sky drives exposure; neutral needs a little more
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = Q.shadow > 0;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.appendChild(renderer.domElement);
 loader.set('Initialising WebGPU…', 5);
@@ -86,7 +89,7 @@ setMaxAnisotropy(renderer.getMaxAnisotropy ? renderer.getMaxAnisotropy() : 8);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 7000);
 const sky = new SkySystem(renderer, scene);
-sky.setShadowSize(Q.shadow);
+if (Q.shadow > 0) sky.setShadowSize(Q.shadow); else sky.sun.castShadow = false;
 
 const ktx2 = new KTX2Loader();
 ktx2.setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/libs/basis/');
@@ -306,7 +309,7 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
   ops = new Operations(layout, plan, rakeType, seedKey);
   if (state.journey?.trainNo) { ops.trainNo = state.journey.trainNo; ops.trainName = state.journey.trainName; }
   tm.push(performance.now());
-  world = new World(scene, layout, { seedKey, density: Q.density });
+  world = new World(scene, layout, { seedKey, density: Q.density, lights: Q.lights });
   world.lampScale = state.nightMail ? 0.3 : 1; // night mail: dim platform lighting
   world.festival = festivalNow();
   cattle.reset(state.sFront || 0);
@@ -701,8 +704,8 @@ async function smRoster(code) {
 }
 // lighter rendering while in Station Master: steadier frame rate (no glow, capped pixel ratio, smaller shadow map)
 function smPerf(on) {
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, on ? Math.min(1.25, Q.pixelRatio) : Q.pixelRatio));
-  sky.setShadowSize(on ? Math.min(1024, Q.shadow) : Q.shadow);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, on ? Math.min(1.25, maxDpr()) : maxDpr()));
+  if (Q.shadow > 0) sky.setShadowSize(on ? Math.min(1024, Q.shadow) : Q.shadow);
 }
 function showSmOver(g) {
   const pct = g.trains ? Math.round((100 * g.onTime) / g.trains) : 100;
