@@ -9,10 +9,24 @@ const cache = new Map();
 let maxAniso = 8;
 export function setMaxAnisotropy(v) { maxAniso = Math.max(1, Math.min(16, v || 8)); }
 
-function canvas(w, h) {
+// Texture resolution scale (0.5 on phones: a quarter of the memory and paint time).
+// Drawing code keeps working in full-size logical pixels; the context is scaled.
+let texScale = 1;
+export function setTextureScale(v) { texScale = Math.max(0.25, Math.min(1, v || 1)); }
+
+function rawCanvas(w, h) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
-  return [c, c.getContext('2d')];
+  return [c, c.getContext('2d', { willReadFrequently: true })];
+}
+
+function canvas(w, h) {
+  const s = texScale;
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+  const ctx = c.getContext('2d');
+  if (s !== 1) ctx.scale(c.width / w, c.height / h);
+  return [c, ctx];
 }
 
 function toTexture(c, { srgb = true, repeat = null, wrap = true } = {}) {
@@ -31,7 +45,7 @@ function heightToNormal(src, strength = 2.0) {
   const w = src.width, h = src.height;
   const sctx = src.getContext('2d');
   const data = sctx.getImageData(0, 0, w, h).data;
-  const [c, ctx] = canvas(w, h);
+  const [c, ctx] = rawCanvas(w, h);
   const out = ctx.createImageData(w, h);
   const H = (x, y) => data[(((y + h) % h) * w + ((x + w) % w)) * 4] / 255;
   for (let y = 0; y < h; y++) {
@@ -192,7 +206,7 @@ export function terrainDetailTexture() {
       }
     }
     const [hc, hctx] = canvas(S, S);
-    hctx.drawImage(c, 0, 0);
+    hctx.drawImage(c, 0, 0, S, S);
     return { map: toTexture(c, { srgb: true }), normalMap: heightToNormal(hc, 1.0) };
   });
 }
@@ -446,11 +460,11 @@ export function coachLiveryTextures(key, { body, roof = '#4b5563', vSide0, vSide
       fn(bctx, W, sideH);
       targetCtx.save();
       if (!flip) {
-        targetCtx.drawImage(bc, 0, row(vSide1));
+        targetCtx.drawImage(bc, 0, row(vSide1), W, sideH);
       } else {
         targetCtx.translate(W, row(vRoof1));
         targetCtx.scale(-1, -1);
-        targetCtx.drawImage(bc, 0, 0);
+        targetCtx.drawImage(bc, 0, 0, W, sideH);
       }
       targetCtx.restore();
     };

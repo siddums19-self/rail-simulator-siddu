@@ -5,7 +5,7 @@ import { pass, saturation, float } from 'three/tsl';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { API_BASE, RAKES, QUALITY, TRACK } from './config.js';
-import { setMaxAnisotropy } from './core/textures.js';
+import { setMaxAnisotropy, setTextureScale } from './core/textures.js';
 import { updateNightEmissives } from './core/materials.js';
 import { buildRouteLayout } from './route/layout.js';
 import { solveOffline, OFFLINE_HUBS, applyOverrides } from './route/offlineSolver.js';
@@ -84,7 +84,8 @@ document.body.appendChild(renderer.domElement);
 loader.set('Initialising WebGPU…', 5);
 await renderer.init();
 const isWebGPU = !!renderer.backend?.isWebGPUBackend;
-setMaxAnisotropy(renderer.getMaxAnisotropy ? renderer.getMaxAnisotropy() : 8);
+setMaxAnisotropy(isMobile() ? 2 : (renderer.getMaxAnisotropy ? renderer.getMaxAnisotropy() : 8));
+if (isMobile()) setTextureScale(0.5); // phones: quarter-size procedural textures (GPU memory + load time)
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 7000);
