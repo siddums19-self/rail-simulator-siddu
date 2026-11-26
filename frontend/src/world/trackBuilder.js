@@ -241,14 +241,17 @@ export function buildOHE(group, path, layout, a, b, laneSegs, opts = {}) {
       }
       continue;
     }
-    // Cantilever masts outside each running line
+    // Cantilever masts outside each running line (or on bridge deck when over a river / widened)
+    const onRiver = layout.rivers?.some((r) => Math.abs(s - r.s) < r.width / 2 + 25);
     const sides = [];
-    if (maxL - minL < 0.5) sides.push({ mastL: minL - 3.4, trackL: minL });
-    else {
-      sides.push({ mastL: minL - 3.4, trackL: minL });
-      sides.push({ mastL: maxL + 3.4, trackL: maxL });
+    if (maxL - minL < 0.5) sides.push({ mastL: minL - (onRiver ? 2.8 : 3.4), trackL: minL });
+    else if (maxL - minL > 15 || (onRiver && maxL - minL > 6)) {
+      for (const l of lanesHere) sides.push({ mastL: l + (l < 0 ? -2.9 : 2.9), trackL: l });
+    } else {
+      sides.push({ mastL: minL - (onRiver ? 2.8 : 3.4), trackL: minL });
+      sides.push({ mastL: maxL + (onRiver ? 2.8 : 3.4), trackL: maxL });
     }
-    const elevated = y - path.groundAt(s) > 3.5;
+    const elevated = onRiver || y - path.groundAt(s) > 3.5;
     for (const sd of sides) {
       if (opts.skipMast && opts.skipMast(s, sd.mastL)) continue;
       path.pointAt(s, sd.mastL, v);

@@ -122,13 +122,18 @@ export class RoadTraffic {
     this.len = this.cum.at(-1);
     this.laneOff = laneOff; this.stops = stops;
     this.cars = [];
+    const hasCrossing = stops.length === 2;
+    const cMin = hasCrossing ? Math.min(stops[0].d, stops[1].d) - 4 : -1;
+    const cMax = hasCrossing ? Math.max(stops[0].d, stops[1].d) + 4 : -1;
     for (let i = 0; i < count; i++) {
       const kind = mix[Math.floor(rand() * mix.length)];
       const pal = PALETTE[kind], color = pal[Math.floor(rand() * pal.length)];
       const obj = buildVehicle(kind, color);
       this.group.add(obj);
       const dir = i % 2 ? 1 : -1;
-      this.cars.push({ obj, kind, dir, d: rand() * this.len, v: SPEED[kind] * (0.8 + rand() * 0.3), vmax: SPEED[kind] * (0.85 + rand() * 0.3), len: LEN[kind] });
+      let d = rand() * this.len;
+      if (hasCrossing && d >= cMin && d <= cMax) d = dir > 0 ? cMin - 6 - rand() * 20 : cMax + 6 + rand() * 20;
+      this.cars.push({ obj, kind, dir, d: Math.max(0, Math.min(this.len, d)), v: SPEED[kind] * (0.8 + rand() * 0.3), vmax: SPEED[kind] * (0.85 + rand() * 0.3), len: LEN[kind] });
     }
     this.center = pts[Math.floor(pts.length / 2)];
   }
@@ -145,11 +150,19 @@ export class RoadTraffic {
 
   update(dt) {
     const p = { x: 0, y: 0, z: 0, h: 0 };
+    const hasCrossing = this.stops.length === 2;
+    const crossingClosed = hasCrossing && this.stops.some((s) => s.closed());
+    const cMin = hasCrossing ? Math.min(this.stops[0].d, this.stops[1].d) : 0;
+    const cMax = hasCrossing ? Math.max(this.stops[0].d, this.stops[1].d) : 0;
     for (const c of this.cars) {
+      // If a level-crossing gate is closed, never leave any vehicle on the track
+      if (crossingClosed && c.d + c.len * 0.5 > cMin && c.d - c.len * 0.5 < cMax) {
+        c.d = c.dir > 0 ? cMax + c.len * 0.5 + 3 : cMin - c.len * 0.5 - 3;
+      }
       // nearest thing ahead in the same lane: another vehicle or a closed stop line
       let gap = Infinity;
       for (const o of this.cars) if (o !== c && o.dir === c.dir) { const g = (o.d - c.d) * c.dir - o.len - 3; if (g > -1 && g < gap) gap = g; }
-      for (const s of this.stops) if (s.closed()) { const g = (s.d - c.d) * c.dir - c.len * 0.5 - 2; if (g > -2 && g < gap) gap = g; }
+      for (const s of this.stops) if (s.closed()) { const g = (s.d - c.d) * c.dir - c.len * 0.5 - 2.5; if (g > -2 && g < gap) gap = g; }
       const target = gap < 0.5 ? 0 : Math.min(c.vmax, Math.sqrt(2 * 2.5 * Math.max(0, gap)));
       c.v += Math.sign(target - c.v) * Math.min(Math.abs(target - c.v), (target > c.v ? 1.6 : 5) * dt);
       c.d += c.dir * c.v * dt;

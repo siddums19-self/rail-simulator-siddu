@@ -19,6 +19,9 @@ import { Water } from './water.js';
 import { SignalMast } from './signals.js';
 import { animatePerson } from './people.js';
 import { TurnoutManager } from './turnouts.js';
+import { buildJunctionSplits } from './junctionSplits.js';
+import { buildGodavariBridges } from './godavariBridge.js';
+import { buildKrishnaBridges } from './krishnaBridge.js';
 import { M } from '../core/materials.js';
 
 const constLanes = new Map();
@@ -44,8 +47,8 @@ export class World {
     if (this.gtl) this.root.add(this.gtl.group);
     this.gtlW = layout.gtlWest ? buildGtlWest(layout, { seedKey }) : null;
     if (this.gtlW) this.root.add(this.gtlW.group);
-    let extra = this.gtl ? this.gtl.index : null;
-    if (this.gtlW) { if (extra) for (const l of this.gtlW.lines) extra.add(l, 2); else extra = this.gtlW.index; }
+    let extra = this.gtl ? this.gtl.index : new PolylineIndex(80);
+    if (this.gtlW) for (const l of this.gtlW.lines) extra.add(l, 2);
     // Hyderabad airport beside the MMTS line (Fatehnagar -> Lingampalli): levelled ground, kept clear of props
     this.airportPlan = planAirport(layout);
     if (this.airportPlan) flat.push({ x: this.airportPlan.x, z: this.airportPlan.z, r: 820 });
@@ -63,6 +66,8 @@ export class World {
     }
     this.terrain.water = this.water;
     this.water.build(this.root);
+    if (layout.godavari) buildGodavariBridges(this.root, layout);
+    if (layout.krishna) buildKrishnaBridges(this.root, layout);
     this.props = new PropBuilder({
       layout, terrain: this.terrain, seedKey, density,
       exclusion: (x, z) => !!((this.scIndex && this.scIndex.distance(x, z, 60) < 16) || (this.airportPlan && Math.hypot(x - this.airportPlan.x, z - this.airportPlan.z) < 880) || (this.gtl && this.gtl.exclusion(x, z)) || (this.gtlW && this.gtlW.exclusion(x, z)) || this.water.contains(x, z)),
@@ -152,9 +157,28 @@ export class World {
       if (x1 - x0 > 0.5) segs.push({ lane, s0: x0, s1: x1 });
     };
     const mains = (line) => (line === 'D' ? [-TRACK.MAIN_HALF, TRACK.MAIN_HALF] : [0]);
+    const gd = L.godavari, kr = L.krishna;
+    const bridgeLane = (br, o) => {
+      const sign = o < 0 ? -1 : 1;
+      return new Lane(o)
+        .add(br.s0, br.s0 + br.ramp, o, sign * br.halfSep)
+        .add(br.s0 + br.ramp, br.s1 - br.ramp, sign * br.halfSep, sign * br.halfSep)
+        .add(br.s1 - br.ramp, br.s1, sign * br.halfSep, o);
+    };
     for (const g of L.gaps) {
       if (g.s1 < a || g.s0 > b) continue;
-      for (const o of mains(g.line)) push(constLane(o), g.s0, g.s1);
+      const br = (gd && g.index === gd.gapIndex) ? gd : (kr && g.index === kr.gapIndex) ? kr : null;
+      if (br && g.line === 'D') {
+        for (const o of mains(g.line)) {
+          if (b > br.s0 && a < br.s1) {
+            push(constLane(o), g.s0, br.s0);
+            push(bridgeLane(br, o), br.s0, br.s1);
+            push(constLane(o), br.s1, g.s1);
+          } else push(constLane(o), g.s0, g.s1);
+        }
+      } else {
+        for (const o of mains(g.line)) push(constLane(o), g.s0, g.s1);
+      }
     }
     const first = L.stations[0].layout, last = L.stations[L.stations.length - 1].layout;
     for (const o of mains(first.entryLine)) push(constLane(o), 30, first.zoneStart);
@@ -195,11 +219,14 @@ export class World {
     // beyond a terminus' buffer stops there is no railway at all
     const ra = Math.max(a, this.layout.trackMin ?? 0), rb = Math.min(b, this.layout.trackMax ?? this.layout.total);
     if (rb > ra) buildOHE(group, this.layout.path, this.layout, ra, rb, segs, { skipMast: gtl ? gtl.skipMast : null });
+    const inBridge = (s) => (this.layout.godavari && s > this.layout.godavari.s0 - 5 && s < this.layout.godavari.s1 + 5)
+      || (this.layout.krishna && s > this.layout.krishna.s0 - 5 && s < this.layout.krishna.s1 + 5);
     if (rb > ra) buildFormation(group, this.layout.path, this.layout, ra, rb, {
       skipPier: gtl ? gtl.skipPier : null, walled: inGtl,
-      // Guntakal flyover: a walled (retaining-wall) embankment, with a bridge only over the Bellary line
-      deckMinH: (s) => (inGtl(s) ? (gtl && s > gtl.bridgeA && s < gtl.bridgeB ? 1.0 : 99) : 3.6),
-      embMax: (s) => (inGtl(s) ? (gtl && s > gtl.bridgeA && s < gtl.bridgeB ? 0.9 : 30) : 5.2),
+      // Guntakal flyover: a walled (retaining-wall) embankment, with a bridge only over the Bellary line;
+      // Godavari / Krishna widening: separate twin bridges are built by buildGodavariBridges / buildKrishnaBridges
+      deckMinH: (s) => (inBridge(s) ? 99 : inGtl(s) ? (gtl && s > gtl.bridgeA && s < gtl.bridgeB ? 1.0 : 99) : 3.6),
+      embMax: (s) => (inBridge(s) ? 0.1 : inGtl(s) ? (gtl && s > gtl.bridgeA && s < gtl.bridgeB ? 0.9 : 30) : 5.2),
       pierSpacing: (s) => (inGtl(s) ? 24 : 30)
     });
     this.props.build(group, idx, a, b);
@@ -294,6 +321,7 @@ export class World {
       lights.push(new THREE.Vector3(p.x, p.y + 14, p.z));
     }
     this._decorTracks(st, res.root);
+    buildJunctionSplits(st, L, res.root, this.terrain.extra);
     decorateStation(this.festival, st, L, res);
     this.root.add(res.root);
     return { ...res, signals, lights };
@@ -367,11 +395,11 @@ export class World {
   updateLevelCrossings(sFront, trainLen, dt) {
     let bell = null;
     for (const lc of this.lcs) {
-      const closing = sFront > lc.s - 900 && sFront - trainLen < lc.s + 25;
+      const closing = sFront > lc.s - 1200 && sFront - trainLen < lc.s + 40;
       const target = closing && !lc.stuckOpen ? 1 : 0; // stuckOpen: the gateman has not closed the gate (incident)
-      lc.closed += Math.sign(target - lc.closed) * Math.min(Math.abs(target - lc.closed), dt / 5);
+      lc.closed += Math.sign(target - lc.closed) * Math.min(Math.abs(target - lc.closed), dt / 3.5);
       for (const p of lc.pivots) p.pivot.rotation.x = p.open * (1 - lc.closed);
-      if (closing && !lc.stuckOpen && lc.closed < 1 && Math.abs(lc.s - sFront) < 900) bell = lc;
+      if (closing && !lc.stuckOpen && lc.closed < 1 && Math.abs(lc.s - sFront) < 1200) bell = lc;
     }
     return bell;
   }

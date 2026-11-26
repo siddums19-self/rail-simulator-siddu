@@ -157,7 +157,8 @@ const state = {
   sFront: 0, speed: 0, notch: 0, brake: 0, emergency: false,
   auto: false, simRate: 2, kavach: true, incident: null, busyStations: true,
   weather: 'CLEAR', gameMinutes: 7 * 60 + 15, lights: 'auto', wipers: 'auto', derailments: false, scale: Number(localStorageGet('railsim.scale') || 1),
-  backendOnline: false, panto: true, brakeEff: 0, incidentsOn: true
+  backendOnline: false, panto: true, brakeEff: 0, incidentsOn: true,
+  paused: false, priorityReqStation: -1, reverseMode: false
 };
 let layout = null, world = null, consist = null, ops = null, traffic = null, timetable = null, scorer = null, incidents = null, weatherOps = null, control = null;
 const stationAudio = new StationAudio(audio);
@@ -315,6 +316,8 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
     for (const st of layout.stations) if (!st.isOrigin && !st.isDest && !st.reversal) st.halt = false;
   }
   ops = new Operations(layout, plan, rakeType, seedKey);
+  state.priorityReqStation = -1;
+  if ($('priority-status')) { $('priority-status').style.display = 'none'; $('priority-status').textContent = ''; }
   if (state.journey?.trainNo) { ops.trainNo = state.journey.trainNo; ops.trainName = state.journey.trainName; }
   tm.push(performance.now());
   world = new World(scene, layout, { seedKey, density: Q.density, lights: Q.lights });
@@ -367,7 +370,7 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
   state.originDepRecorded = false; state.dueShown = null; state.stallT = 0; state.brakeEff = 0;
   if (!cont) state.panto = true;
   $('btn-panto').style.display = RAKES[rakeType].traction === 'electric' || goods ? '' : 'none';
-  $('btn-panto').classList.add('on'); $('btn-panto').textContent = 'Panto: up';
+  syncPantoBtn(true);
   state.engineChange = null; state.haltedAt = null; state.passed = new Set(); state.summaryShown = false;
   state.traction = consist.loco ? LOCOS[consist.loco].traction : RAKES[rakeType].traction;
   state.locoSpan = consist.vehicles.reduce((span, v) => (['WAP7', 'WAG12', 'WAG9', 'WDP4D'].includes(v.kind) ? v.offset + v.length : span), consist.vehicles[0].length);
@@ -444,11 +447,15 @@ function buildStripMap() {
   track.querySelectorAll('.st').forEach((e) => e.remove());
   const total = layout.total;
   const n = layout.stations.length;
+  const wide = n > 8;
+  track.style.width = wide ? `${Math.max(100, n * 11)}%` : '100%';
+  if ($('strip-left')) $('strip-left').style.display = wide ? 'flex' : 'none';
+  if ($('strip-right')) $('strip-right').style.display = wide ? 'flex' : 'none';
   layout.stations.forEach((st, i) => {
     const d = document.createElement('div');
     d.className = 'st' + (st.halt ? ' halt' : '');
     d.style.left = `${(st.layout.sCenter / total) * 100}%`;
-    if (st.halt || i === 0 || i === n - 1 || n < 14) {
+    if (wide || st.halt || i === 0 || i === n - 1 || n < 14) {
       const lb = document.createElement('label');
       lb.textContent = st.code;
       d.appendChild(lb);
@@ -456,6 +463,7 @@ function buildStripMap() {
     d.title = `${st.name} (${st.platforms} PF)`;
     track.appendChild(d);
   });
+  if ($('strip-viewport')) $('strip-viewport').scrollLeft = 0;
 }
 
 // ======================================================================
@@ -506,13 +514,46 @@ function updatePlatformPanel() {
 // Input
 // ======================================================================
 // Goods locos have a dynamic (regenerative) brake: notching below N0 gives DB1..DB4.
-function notch(d) { const lo = RAKES[state.rakeType].dynBrake ? -4 : 0; state.notch = Math.max(lo, Math.min(8, state.notch + d)); if (d > 0 && state.notch > 0) { state.brake = 0; state.emergency = false; } state.auto = false; syncAuto(); }
+// At zero speed, clicking Throttle − engages Reverse gear (R1..R4) to move backward.
+function notch(d) {
+  if (state.speed < 0.05 && state.notch === 0 && d < 0 && !state.reverseMode) {
+    state.reverseMode = true;
+    state.notch = -1;
+    state.brake = 0; state.emergency = false; state.auto = false; syncAuto();
+    toast('Reverse gear engaged — Throttle − to reverse, Throttle + to return to Forward', 'ok', 2400);
+    return;
+  }
+  if (state.reverseMode) {
+    if (d > 0 && state.notch === 0 && state.speed < 0.05) {
+      state.reverseMode = false;
+      state.notch = 1;
+      state.brake = 0; state.emergency = false; state.auto = false; syncAuto();
+      toast('Forward gear engaged', 'ok', 1600);
+      return;
+    }
+    state.notch = Math.max(-4, Math.min(0, state.notch + d));
+    if (d < 0 && state.notch < 0) { state.brake = 0; state.emergency = false; }
+    state.auto = false; syncAuto();
+    return;
+  }
+  const lo = RAKES[state.rakeType].dynBrake ? -4 : 0;
+  state.notch = Math.max(lo, Math.min(8, state.notch + d));
+  if (d > 0 && state.notch > 0) { state.brake = 0; state.emergency = false; }
+  state.auto = false; syncAuto();
+}
 function brake(d) { state.brake = Math.max(0, Math.min(100, state.brake + d)); if (d > 0 && state.notch > 0) state.notch = 0; state.auto = false; syncAuto(); }
+const PANTO_UP_SVG = '<svg viewBox="0 0 24 24"><path d="M4 20h16M7 20l5-7 5 7M12 13l-4-5 4-4 4 4-4 5M6 4h12"/></svg>';
+const PANTO_DN_SVG = '<svg viewBox="0 0 24 24"><path d="M4 20h16M6 20l6-3 6 3M7 16h10"/></svg>';
+function syncPantoBtn(up) {
+  $('btn-panto').classList.toggle('on', up);
+  if ($('panto-txt')) $('panto-txt').textContent = `Panto: ${up ? 'up' : 'down'}`;
+  if ($('panto-ico')) $('panto-ico').innerHTML = up ? PANTO_UP_SVG : PANTO_DN_SVG;
+}
 function setPanto(up, quiet = false) {
   if (state.panto === up) return;
   state.panto = up;
   for (const v of consist.vehicles.slice(0, 2)) setPantograph(v, up);
-  $('btn-panto').classList.toggle('on', up); $('btn-panto').textContent = `Panto: ${up ? 'up' : 'down'}`;
+  syncPantoBtn(up);
   if (!quiet) toast(up ? 'Pantograph raised — traction available' : 'Pantograph lowered — no traction', up ? 'ok' : 'warn', 2000);
 }
 function syncAuto() { $('btn-auto').classList.toggle('on', state.auto); }
@@ -540,6 +581,69 @@ $('btn-panto').onclick = () => { if (state.traction === 'electric') setPanto(!st
 $('btn-incidents').onclick = (e) => { state.incidentsOn = !state.incidentsOn; if (incidents) incidents.enabled = state.incidentsOn; e.target.classList.toggle('on', state.incidentsOn); toast(state.incidentsOn ? 'Breakdowns & incidents ON — follow the procedure when one happens' : 'Breakdowns & incidents OFF (the current one still runs to the end)', 'ok', 2600); };
 $('inc-panel').onclick = (e) => { const b = e.target.closest('[data-act]'); if (b && !b.disabled && incidents) { incidents.act(b.dataset.act); } };
 $('btn-kavach').onclick = (e) => { state.kavach = !state.kavach; e.target.classList.toggle('on', state.kavach); toast(state.kavach ? 'Kavach ATP ON — automatic braking for red signals & overspeed' : 'Kavach ATP OFF — you are responsible for signals; SPADs can cause collisions', state.kavach ? 'ok' : 'warn', 3500); };
+
+// Pause / Resume
+function togglePause(force = null) {
+  if (!layout || $('home').style.display === 'flex') return;
+  state.paused = force !== null ? force : !state.paused;
+  $('pause-overlay').style.display = state.paused ? 'flex' : 'none';
+  $('btn-pause').textContent = state.paused ? 'Resume' : 'Pause';
+  if (audio.master && audio.ctx) audio.master.gain.setTargetAtTime(state.paused ? 0 : 0.9, audio.ctx.currentTime, 0.08);
+}
+$('btn-pause').onclick = () => togglePause();
+$('btn-unpause').onclick = () => togglePause(false);
+
+// Priority request when running > 30 min late
+$('btn-priority').onclick = () => {
+  if (!ops || !layout) return;
+  const nst = ops.nextStation(state.sFront) || ops.currentStation(state.sFront);
+  if (!nst) return;
+  if (state.priorityReqStation === nst.index) {
+    toast('Priority already requested for this section — wait until the next station', 'warn', 2400);
+    return;
+  }
+  state.priorityReqStation = nst.index;
+  const approved = Math.random() < 0.55;
+  const stEl = $('priority-status');
+  if (approved) {
+    let grantedCount = 0;
+    for (let i = nst.index; i < Math.min(layout.stations.length, nst.index + 4); i++) {
+      if (Math.random() < 0.65 || i === nst.index) {
+        ops.priorityStations.add(i);
+        const sObj = layout.stations[i];
+        if (sObj.busy) sObj.busy.state = 'cleared';
+        grantedCount++;
+      }
+    }
+    stEl.style.display = 'block';
+    stEl.style.color = '#93c5fd';
+    stEl.textContent = `Priority approved (${grantedCount} stations; Rajdhani/VB still lead)`;
+    toast('Control: priority approved — selected stations & slower trains will give way (Rajdhani/VB keep precedence)', 'ok', 4200);
+  } else {
+    stEl.style.display = 'block';
+    stEl.style.color = '#fca5a5';
+    stEl.textContent = 'Priority denied — section congested';
+    toast('Control: priority request denied due to heavy traffic ahead', 'warn', 3200);
+  }
+};
+
+// Minimize toggles
+const bindMinimize = (btnId, panelId) => {
+  const btn = $(btnId), panel = $(panelId);
+  if (!btn || !panel) return;
+  btn.onclick = () => {
+    const min = panel.classList.toggle('minimized');
+    btn.textContent = min ? '+' : '−';
+  };
+};
+bindMinimize('min-left', 'left-panel');
+bindMinimize('min-right', 'right-panel');
+bindMinimize('min-speedo', 'speedo');
+bindMinimize('min-cam', 'campad');
+
+// Strip map scroll arrows
+if ($('strip-left')) $('strip-left').onclick = () => { $('strip-viewport')?.scrollBy({ left: -180, behavior: 'smooth' }); };
+if ($('strip-right')) $('strip-right').onclick = () => { $('strip-viewport')?.scrollBy({ left: 180, behavior: 'smooth' }); };
 $('btn-resume').onclick = () => resumeFromLastStation();
 $('btn-restart').onclick = () => { $('incident').style.display = 'none'; startRoute({ ...state.journey }); };
 $('btn-menu').onclick = () => document.body.classList.toggle('menu-open'); // phones: toolbar folds away
@@ -800,7 +904,8 @@ function muteForHome(on) {
 function showHome() {
   $('home').style.display = 'flex';
   $('home-hi').textContent = account.guest ? `Hi ${account.displayName}` : `Hi ${account.email}`;
-  $('home-signout').textContent = account.guest ? 'Log in' : 'Sign out';
+  $('home-signout').style.display = account.guest ? 'none' : '';
+  $('home-signout').textContent = 'Sign out';
   muteForHome(true);
   $('home-who').textContent = account.guest ? 'Playing as a guest — choose a name for the leaderboards, or log in to keep your career.' : `Logged in as ${account.email}`;
   $('home-guest').style.display = account.guest ? 'flex' : 'none';
@@ -813,12 +918,71 @@ $('home-signout').onclick = async () => {
   if (account.guest) { setAuthMode('login'); showAuth(); return; }
   await account.logout(); toast('Signed out — playing as guest', 'ok', 2500); showHome();
 };
-$('tile-drive').onclick = () => { hideHome(); $('route-modal').style.display = 'none'; };
+$('tile-drive').onclick = () => {
+  if (!account.guest && (account.career.saveSlots || []).some(Boolean)) {
+    openSaveModal('home');
+    return;
+  }
+  hideHome(); $('route-modal').style.display = 'none';
+};
 $('tile-station').onclick = (e) => { if (e.target.closest('select')) return; smStart($('home-sm-station').value, $('home-sm-mode').value); };
 $('tile-ctl').onclick = () => secStart('controller', 6);
 
 $('tile-stats').onclick = () => openStats();
 $('tile-career').onclick = () => { $('career-modal').style.display = 'flex'; renderCareer(); };
+
+// ---- Playing Guide (Train Simulation only)
+const SIM_GUIDE_ITEMS = [
+  { cat: 'journey', icon: '🗺', name: 'Route & Roster', key: '—', desc: 'Choose source, destination, via route, train/rake type (Vande Bharat, LHB, Rajdhani, Goods, Suburban), or load a saved train.' },
+  { cat: 'journey', icon: '⇄', name: 'Reverse', key: '—', desc: 'Swap your source and destination stations and start the return journey.' },
+  { cat: 'journey', icon: '🤖', name: 'Auto drive', key: 'A', desc: 'Hands over driving to the AI auto-driver, which obeys signals, speed limits, and scheduled station halts.' },
+  { cat: 'journey', icon: '⏱', name: 'Stops', key: '—', desc: 'Tick or untick intermediate stations to halt at and customize dwell times in journey minutes.' },
+  { cat: 'journey', icon: '🗓', name: 'Timetable', key: '—', desc: 'Opens the working timetable showing scheduled vs. actual arrival/departure times and ETAs.' },
+  { cat: 'journey', icon: '📈', name: 'Recorder', key: '—', desc: 'Displays the live speed recorder chart vs. route speed limits.' },
+  { cat: 'journey', icon: '⚠', name: 'Caution', key: '—', desc: 'Shows active T.409 caution orders and temporary speed restrictions (TSRs) due to weather or track work.' },
+  { cat: 'journey', icon: '📷', name: 'Photo', key: '—', desc: 'Hides the HUD for free camera orbit, time-of-day slider, and saving screenshots.' },
+  { cat: 'journey', icon: '⏸', name: 'Pause / Resume', key: 'Esc', desc: 'Freezes physics, AI traffic, clock, and audio so you can take a break and resume anytime.' },
+  { cat: 'journey', icon: '📖', name: 'Guide', key: '—', desc: 'Pauses the game and opens this interactive Playing Guide.' },
+  { cat: 'journey', icon: '⚡', name: 'Ask Priority', key: '—', desc: 'Appears when running >30 min late (non-premier trains). Requests section priority from control (random approval; Rajdhani/Vande Bharat keep precedence).' },
+  { cat: 'safety', icon: '🛡', name: 'Kavach', key: '—', desc: 'Automatic Train Protection (ATP): automatically applies brakes to prevent overspeeding and red-signal SPADs.' },
+  { cat: 'safety', icon: '🚦', name: 'Busy stns', key: '—', desc: 'When ON, congested stations (like Vijayawada) can hold the Home signal at RED until a platform clears.' },
+  { cat: 'safety', icon: '⚡', name: 'Incidents', key: '—', desc: 'Enables random operational incidents (hot axle, OHE dead section, signal failure, open LC gate) with real loco-pilot procedures.' },
+  { cat: 'safety', icon: '💥', name: 'Derail', key: '—', desc: 'Toggles realistic derailment on severe overspeed through turnouts/curves vs. score penalty + lurch only.' },
+  { cat: 'safety', icon: '💡', name: 'Lights', key: 'L', desc: 'Cycles locomotive headlights between Auto (dark/fog/rain), On, and Off.' },
+  { cat: 'safety', icon: '🌧', name: 'Wipers', key: 'I', desc: 'Cycles windscreen wipers between Auto (monsoon rain), On, and Off.' },
+  { cat: 'controls', icon: '⚡', name: 'Throttle +', key: 'W', desc: 'Increases traction notch (N1–N8) to accelerate. Lights up green when power is applied.' },
+  { cat: 'controls', icon: '⬇', name: 'Throttle −', key: 'S', desc: 'Reduces throttle notch toward N0; at zero speed, clicking Throttle − engages Reverse (R1–R4) to move backward. On goods locos while moving, notches below N0 engage dynamic braking (DB1–DB4).' },
+  { cat: 'controls', icon: '🛑', name: 'Brake', key: 'Space', desc: 'Applies train brakes in steps (0–100%). Highlights orange when brakes are applied.' },
+  { cat: 'controls', icon: '↺', name: 'Release', key: 'R', desc: 'Fully releases train brakes back to 0%.' },
+  { cat: 'controls', icon: '⚠', name: 'EMG Brake', key: 'E', desc: 'Cuts power immediately and applies 100% emergency braking.' },
+  { cat: 'controls', icon: '📢', name: 'HORN', key: 'H', desc: 'Sounds the locomotive horn (required at W/L whistle boards before level crossings).' },
+  { cat: 'controls', icon: '🔌', name: 'Panto', key: 'P', desc: 'Raises or lowers the electric locomotive pantograph (must be lowered through OHE dead sections).' },
+  { cat: 'hud', icon: '🎥', name: 'Camera Views & Pad', key: '1–9, C', desc: 'Switch between front cab, exterior, guard van (8), and crew (9) views, or pan/orbit/zoom using the Camera Pad (can be minimized with −).' },
+  { cat: 'hud', icon: '➖', name: 'Minimize Panels', key: '—', desc: 'Use − / + on the Left Journey panel, Right Weather/Sim panel, Camera Pad, and Speedometer (collapses to speed only).' },
+  { cat: 'hud', icon: '◀▶', name: 'Station Strip Slider', key: '—', desc: 'Scroll left/right across long routes with many stations so station names never overlap.' },
+  { cat: 'save', icon: '⌂', name: 'Main menu', key: '—', desc: 'Returns to the main dashboard.' },
+  { cat: 'save', icon: '💾', name: 'Save / Load (Signed-in)', key: '—', desc: 'Save your simulator progress up to the last station in 3 named slots (default save-1) and resume or start a new game.' },
+  { cat: 'save', icon: '👤', name: 'Account / Login', key: '—', desc: 'Log in or sign up (pauses the active game for a fresh login) or log out to drive as guest.' }
+];
+let guideCat = 'all';
+function renderGuide() {
+  const list = guideCat === 'all' ? SIM_GUIDE_ITEMS : SIM_GUIDE_ITEMS.filter((x) => x.cat === guideCat);
+  $('guide-grid').innerHTML = list.map((x, idx) => `<button type="button" class="guide-item" data-gidx="${idx}"><b>${x.icon} ${x.name} <span class="muted" style="font-weight:400;">(${x.key})</span></b><small>${x.desc}</small></button>`).join('');
+  document.querySelectorAll('#guide-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.gcat === guideCat));
+}
+$('tile-guide').onclick = () => { renderGuide(); $('guide-modal').style.display = 'flex'; };
+if ($('btn-guide')) $('btn-guide').onclick = () => { if (layout && !state.paused) togglePause(true); renderGuide(); $('guide-modal').style.display = 'flex'; };
+$('guide-close').onclick = () => { $('guide-modal').style.display = 'none'; };
+$('guide-drive').onclick = () => { $('guide-modal').style.display = 'none'; if (layout) { togglePause(false); } else { $('tile-drive').click(); } };
+$('guide-tabs').onclick = (e) => { const b = e.target.closest('[data-gcat]'); if (!b) return; guideCat = b.dataset.gcat; renderGuide(); };
+$('guide-grid').onclick = (e) => {
+  const item = e.target.closest('[data-gidx]'); if (!item) return;
+  const list = guideCat === 'all' ? SIM_GUIDE_ITEMS : SIM_GUIDE_ITEMS.filter((x) => x.cat === guideCat);
+  const x = list[Number(item.dataset.gidx)]; if (!x) return;
+  $('guide-grid').querySelectorAll('.guide-item').forEach((el) => el.classList.remove('on'));
+  item.classList.add('on');
+  $('guide-detail').innerHTML = `<b>${x.icon} ${x.name}</b> &nbsp;<span class="badge">Shortcut: ${x.key}</span><div style="margin-top:4px;color:#cbd5e1;">${x.desc}</div>`;
+};
 $('btn-mainmenu').onclick = () => $('btn-home').onclick();
 $('btn-home').onclick = () => { if (state.speed > 0.5 && !confirm('Go back to the start screen? Your train will be left where it is.')) return; showHome(); };
 
@@ -843,7 +1007,7 @@ async function renderStats() {
 document.querySelectorAll('#stats-period button').forEach((b) => { b.onclick = () => { statsPeriod = b.dataset.p; renderStats(); }; });
 document.querySelectorAll('#stats-mode button').forEach((b) => { b.onclick = () => { statsMode = b.dataset.m; renderStats(); }; });
 $('stats-close').onclick = () => { $('stats-modal').style.display = 'none'; };
-$('btn-stats').onclick = () => openStats();
+if ($('btn-stats')) $('btn-stats').onclick = () => openStats();
 
 // ======================================================================
 // Dynamic weather, photo mode, multiplayer rooms, daily challenge, Mumbai peak, achievements
@@ -1105,6 +1269,7 @@ window.addEventListener('keydown', async (e) => {
     case 'KeyH': audio.hornStart(); if (state.nightMail && layout?.stationAt(state.sFront, 400)) state.nightHorns = (state.nightHorns || 0) + 1; break;
     case 'KeyB': break;
     case 'KeyA': $('btn-auto').click(); break;
+    case 'Escape': togglePause(); break;
     case 'KeyC': rig.setMode(rig.mode + 1); camSel.value = String(rig.mode); break;
     default:
       if (e.code === 'KeyL') toggleLights();
@@ -1172,9 +1337,9 @@ function physics(dt, fx = {}) {
   const demand = state.emergency ? 1 : brakePct / 100;
   const tau = demand > state.brakeEff ? (state.emergency ? 0.55 : 1) * (R.brakeTau ?? 1.4) : (R.releaseTau ?? (R.brakeTau ?? 1.4) * 1.6);
   state.brakeEff += (demand - state.brakeEff) * Math.min(1, dt / Math.max(0.05, tau));
-  const vmax = R.vmax / 3.6;
+  const vmax = state.reverseMode ? Math.min(R.vmax / 3.6, 40 / 3.6) : R.vmax / 3.6;
   const powerOn = !fx.tractionCut && !(state.traction === 'electric' && !state.panto);
-  const throttle = powerOn ? Math.max(0, state.notch) / 8 : 0;
+  const throttle = powerOn ? (state.reverseMode ? Math.max(0, -state.notch) / 4 : Math.max(0, state.notch) / 8) : 0;
   const wetRail = state.weather === 'MONSOON' ? 0.82 : 1;
   let tract;
   if (R.goods) {
@@ -1192,8 +1357,8 @@ function physics(dt, fx = {}) {
   const resist = v > 0.01 ? (R.goods ? 0.011 + 0.000014 * v * v : 0.008 + 0.0000085 * v * v) : 0;
   const wet = state.weather === 'MONSOON' ? 0.75 : 1;
   const brk = state.brakeEff * B * (state.emergency ? 1.32 : 1) * wet;
-  const dyn = state.notch < 0 && powerOn ? (-state.notch / 4) * (R.dynBrake || 0) * Math.min(1, v / 4) : 0;
-  let a = tract - resist - grade - (v > 0.01 ? brk + dyn : 0);
+  const dyn = !state.reverseMode && state.notch < 0 && powerOn ? (-state.notch / 4) * (R.dynBrake || 0) * Math.min(1, v / 4) : 0;
+  let a = tract - resist - (state.reverseMode ? -grade : grade) - (v > 0.01 ? brk + dyn : 0);
   if (v <= 0.01 && a < 0) a = 0;
   // stalled: full power, standing, and the bank is too steep to start
   if (R.goods && !state.auto && state.notch === 8 && powerOn && v < 0.15 && tract - grade < 0.004 && state.brakeEff < 0.1) {
@@ -1206,7 +1371,10 @@ function physics(dt, fx = {}) {
   if (state.speed < 0.05 && state.emergency) state.emergency = false;
   prevFront = state.sFront;
   const end = layout.trackMax < layout.total ? layout.trackMax - 4 : layout.total - 32; // buffer stops
-  state.sFront = Math.min(end, state.sFront + state.speed * dt);
+  const minS = Math.max(layout.trackMin || 0, consist.length + 12);
+  state.sFront = state.reverseMode
+    ? Math.max(minS, state.sFront - state.speed * dt)
+    : Math.min(end, state.sFront + state.speed * dt);
   const kmh = state.speed * 3.6;
 
   // Signal passed at danger. Policy: Kavach brakes before the signal; if it is
@@ -1428,7 +1596,7 @@ function updateHud(limit) {
   const vmax = RAKES[state.rakeType].vmax;
   $('speedfill').style.width = `${Math.min(100, (kmh / vmax) * 100)}%`;
   $('speedlim').style.left = `${Math.min(100, (limit / vmax) * 100)}%`;
-  $('notch').textContent = state.notch < 0 ? `DB${-state.notch}` : `N${state.notch}`;
+  $('notch').textContent = state.reverseMode ? `R${-state.notch}` : state.notch < 0 ? `DB${-state.notch}` : `N${state.notch}`;
   $('brake').textContent = state.emergency ? 'EMERGENCY' : `${state.brake}%${RAKES[state.rakeType].goods && Math.abs(state.brakeEff * 100 - state.brake) > 6 ? ` (${Math.round(state.brakeEff * 100)}% on)` : ''}`;
   const g = state.grade || 0;
   $('grade').textContent = Math.abs(g) < 0.0008 ? 'Level' : `1 in ${Math.round(1 / Math.abs(g))} ${g > 0 ? '▲ rising' : '▼ falling'}`;
@@ -1441,13 +1609,24 @@ function updateHud(limit) {
   const line = layout.lineAt(state.sFront);
   let section = st ? `${st.name} yard` : (line === 'D' ? 'Double line' : 'Single line');
   if (layout.gtl && state.sFront > layout.gtl.s0 && state.sFront < layout.gtl.s1) section = layout.gtl.gooty ? `GTL junction · Dhone line ${layout.gtl.dir > 0 ? 'left' : 'right'}` : `Dhone diversion · VV Nagar ${world.gtl.vvSide}`;
+  if (layout.godavari && state.sFront > layout.godavari.s0 && state.sFront < layout.godavari.s1) section = 'Godavari Bridge (70m twin spans)';
+  if (layout.krishna && state.sFront > layout.krishna.s0 && state.sFront < layout.krishna.s1) section = 'Krishna Bridge (Vijayawada approach)';
   $('section').textContent = section;
+  // Dynamic control button logos
+  $('btn-up').classList.toggle('lit', state.notch > 0);
+  $('btn-dn').classList.toggle('lit', state.notch < 0);
+  $('btn-brk').classList.toggle('lit', state.brake > 0 && !state.emergency);
+  $('btn-emg').classList.toggle('lit', !!state.emergency);
+  $('horn-btn').classList.toggle('lit', !!audio.hornHeld);
 
   const halted = !!state.haltedAt && state.speed < 0.3;
   const d = timetable.delay(state.gameMinutes, state.sFront, halted);
   state.delay = d;
   $('delay').textContent = d > 1 ? `Late ${Math.round(d)} min` : d < -1 ? `Ahead ${Math.round(-d)} min` : 'On time';
   $('delay').style.color = d > 1 ? '#fca5a5' : '#86efac';
+  const topTrain = ['VANDE_BHARAT', 'VANDE_BHARAT_ORANGE', 'RAJDHANI', 'DURANTO'].includes(state.rakeType);
+  const canAskPrio = d > 30 && !topTrain && !!ops.nextStation(state.sFront);
+  if ($('btn-priority')) $('btn-priority').classList.toggle('show', canAskPrio);
   $('score').textContent = `${scorer.total()} · comfort ${Math.round(scorer.comfort)}%`;
   const sigs = ops.signalsAhead(state.sFront, 1);
   const sig = sigs[0];
@@ -1535,7 +1714,7 @@ renderer.setAnimationLoop(() => {
     }
     return;
   }
-  if (!layout || busy) {
+  if (!layout || busy || state.paused) {
     if (pipeline) pipeline.render(); else renderer.render(scene, camera);
     return;
   }
@@ -1753,7 +1932,6 @@ function updateEnginePanel() {
   $('engine-sub').textContent = mu ? 'Multiple unit: the loco pilot walks to the other driving cab.' : `Current engine: ${LOCOS[consist.loco || defaultLoco(state.rakeType)].label}`;
   $('engine-select').style.display = mu ? 'none' : '';
   $('btn-engine').textContent = mu ? 'Change ends' : 'Shunter changes engine';
-  $('btn-runround').style.display = mu ? 'none' : '';
 }
 
 // Run round the train yourself with the relief loco (shunting mini-game).
@@ -1967,7 +2145,6 @@ function showSummary() {
 }
 
 $('btn-engine').onclick = () => startEngineChange();
-$('btn-runround').onclick = () => startRunRound();
 $('shunt-panel').onclick = (e) => {
   const b = e.target.closest('[data-shunt]'); const ec = state.engineChange;
   if (!b || ec?.kind !== 'shunt') return;
@@ -2015,7 +2192,150 @@ function finishCareerRun({ completed, late = 0, incident = null }) {
 function renderUserChip() {
   $('user-chip').textContent = account.guest ? `Hi ${account.displayName} · Log in` : `Hi ${account.email} · Sign out`;
   $('user-chip').title = account.guest ? 'Log in or sign up to save your career' : 'Log out';
+  if ($('btn-save-game')) $('btn-save-game').style.display = account.guest ? 'none' : '';
+  if ($('btn-load-game')) $('btn-load-game').style.display = account.guest ? 'none' : '';
 }
+
+// ---- 3-slot Save / Resume system (signed-in mode)
+function getSaveSlots() {
+  account.career.saveSlots ||= [null, null, null];
+  while (account.career.saveSlots.length < 3) account.career.saveSlots.push(null);
+  return account.career.saveSlots.slice(0, 3);
+}
+
+function captureSaveState(slotName) {
+  const nxt = ops.nextStation(state.sFront);
+  const lastIdx = state.haltedAt ? state.haltedAt.index : (nxt ? Math.max(0, nxt.index - 1) : layout.stations.length - 2);
+  const st = layout.stations[lastIdx];
+  return {
+    name: slotName,
+    savedAt: new Date().toISOString(),
+    lastStationIdx: lastIdx,
+    lastStationName: st.name,
+    lastStationCode: st.code,
+    journey: {
+      src: state.src, dst: state.dst, via: state.via, rakeType: state.rakeType,
+      allStops: state.allStops, stops: state.stops,
+      trainNo: ops.trainNo, trainName: ops.trainName,
+      fixedPlan: state.journey?.fixedPlan || null, sub: state.journey?.sub || null, nightMail: state.nightMail
+    },
+    gameMinutes: state.gameMinutes,
+    weather: state.weather,
+    simRate: state.simRate,
+    scale: state.scale,
+    kavach: state.kavach,
+    busyStations: state.busyStations,
+    incidentsOn: state.incidentsOn,
+    derailments: state.derailments,
+    spads: ops.spads,
+    score: scorer ? scorer.total() : 0,
+    controlDelay: state.controlDelay || 0,
+    loco: consist?.loco || null,
+    dwell: Array.from(ops.dwell.entries()),
+    passed: Array.from(state.passed || [])
+  };
+}
+
+function openSaveModal(mode = 'save') {
+  if (account.guest) {
+    toast('Sign in to save or resume simulator games', 'warn', 3000);
+    return;
+  }
+  if (mode === 'save' && (!layout || !ops)) {
+    toast('Start a journey first before saving', 'warn', 2500);
+    return;
+  }
+  $('save-modal-title').textContent = mode === 'save' ? 'Save Simulator Progress (till last station)' : 'Resume Saved Game or Start New';
+  $('save-modal-sub').textContent = mode === 'save'
+    ? 'Choose any of the 3 slots, name it (default save-1), and save or override.'
+    : 'Resume from a saved slot at the last station, or start a new game.';
+  $('save-new-wrap').style.display = mode === 'home' ? 'flex' : 'none';
+  renderSaveSlots(mode);
+  $('save-modal').style.display = 'flex';
+}
+
+function renderSaveSlots(mode) {
+  const slots = getSaveSlots();
+  const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  $('save-slots-list').innerHTML = slots.map((s, i) => {
+    const defName = s?.name || `save-${i + 1}`;
+    const info = s
+      ? `<b>${esc(s.name)}</b> <span class="muted">· ${esc(s.journey.src)} → ${esc(s.journey.dst)} (${esc(RAKES[s.journey.rakeType]?.label || s.journey.rakeType)})</span><small>Last station: ${esc(s.lastStationName)} (${esc(s.lastStationCode)}) · Saved ${new Date(s.savedAt).toLocaleString()}</small>`
+      : `<b>Slot ${i + 1} (Empty)</b><small>No saved game in this slot</small>`;
+    if (mode === 'save') {
+      return `<div class="save-slot${s ? '' : ' empty'}">${info}<div class="row"><input type="text" maxlength="24" data-slot-name="${i}" value="${esc(defName)}" placeholder="save-${i + 1}"><button class="primary" data-save-slot="${i}">${s ? 'Override' : 'Save'}</button></div></div>`;
+    }
+    return `<div class="save-slot${s ? '' : ' empty'}">${info}${s ? `<div class="row" style="justify-content:flex-end;"><button class="primary" data-load-slot="${i}">▶ Resume</button><button class="danger" data-del-slot="${i}">Delete</button></div>` : ''}</div>`;
+  }).join('');
+}
+
+async function loadFromSlot(idx) {
+  const slots = getSaveSlots();
+  const s = slots[idx];
+  if (!s) return;
+  $('save-modal').style.display = 'none';
+  hideHome();
+  $('route-modal').style.display = 'none';
+  state.weather = s.weather || state.weather;
+  state.simRate = s.simRate || state.simRate;
+  state.scale = s.scale || state.scale;
+  state.kavach = s.kavach ?? true;
+  state.busyStations = s.busyStations ?? true;
+  state.incidentsOn = s.incidentsOn ?? true;
+  state.derailments = s.derailments ?? false;
+  await startRoute({ ...s.journey, minutes: s.gameMinutes });
+  if (!layout || !ops) return;
+  const stIdx = Math.max(0, Math.min(layout.stations.length - 2, s.lastStationIdx || 0));
+  const st = layout.stations[stIdx];
+  if (st.isOrigin) ops.departedOrigin = true; else ops.dwell.set(st.index, (st.dwellMin || 1) + 1);
+  for (const [k, v] of (s.dwell || [])) ops.dwell.set(k, v);
+  state.passed = new Set(s.passed || []);
+  ops.spads = s.spads || 0;
+  state.controlDelay = s.controlDelay || 0;
+  if (scorer && typeof s.score === 'number') scorer.points = s.score;
+  state.speed = 0; state.notch = 0; state.brake = 0; state.emergency = false;
+  state.sFront = st.layout.pEnd - 14;
+  traffic.clearAll();
+  const p = layout.path.pointAt(state.sFront, 0);
+  world.update(state.sFront, p, { init: true });
+  consist.place(layout.path, ops.lane, state.sFront, 1);
+  rig.reset();
+  toast(`Resumed "${s.name}" at ${st.name}`, 'ok', 3500);
+}
+
+$('save-close').onclick = () => { $('save-modal').style.display = 'none'; };
+$('btn-new-game').onclick = () => { $('save-modal').style.display = 'none'; hideHome(); $('route-modal').style.display = 'block'; placePop('route-modal'); };
+$('btn-save-game').onclick = () => openSaveModal('save');
+$('btn-load-game').onclick = () => openSaveModal('load');
+$('save-slots-list').onclick = async (e) => {
+  const sv = e.target.closest('[data-save-slot]');
+  if (sv) {
+    const idx = Number(sv.dataset.saveSlot);
+    const inp = $('save-slots-list').querySelector(`[data-slot-name="${idx}"]`);
+    const name = (inp?.value || '').trim() || `save-${idx + 1}`;
+    const slots = getSaveSlots();
+    slots[idx] = captureSaveState(name);
+    account.career.saveSlots = slots;
+    account.dirty = true;
+    await account.save();
+    renderSaveSlots('save');
+    toast(`Saved to "${name}" (at ${slots[idx].lastStationName})`, 'ok', 3200);
+    return;
+  }
+  const ld = e.target.closest('[data-load-slot]');
+  if (ld) { await loadFromSlot(Number(ld.dataset.loadSlot)); return; }
+  const dl = e.target.closest('[data-del-slot]');
+  if (dl) {
+    const idx = Number(dl.dataset.delSlot);
+    const slots = getSaveSlots();
+    slots[idx] = null;
+    account.career.saveSlots = slots;
+    account.dirty = true;
+    await account.save();
+    renderSaveSlots('load');
+    toast('Save slot deleted', 'ok', 2000);
+  }
+};
 
 function renderCareer() {
   if ($('career-modal').style.display !== 'flex') return;
@@ -2044,8 +2364,16 @@ function setAuthMode(m) {
   $('auth-pass').autocomplete = m === 'login' ? 'current-password' : 'new-password';
   $('auth-err').textContent = '';
 }
-function showAuth(msg = '') { $('auth').style.display = 'flex'; $('auth-err').textContent = msg; setTimeout(() => $('auth-email').focus(), 50); }
+function showAuth(msg = '') {
+  if (layout && $('home').style.display !== 'flex' && !state.paused) togglePause(true);
+  $('auth-email').value = '';
+  $('auth-pass').value = '';
+  $('auth').style.display = 'flex';
+  $('auth-err').textContent = msg;
+  setTimeout(() => $('auth-email').focus(), 50);
+}
 function hideAuth() { $('auth').style.display = 'none'; }
+$('auth-close').onclick = () => hideAuth();
 $('auth-tab-login').onclick = () => setAuthMode('login');
 $('auth-tab-signup').onclick = () => setAuthMode('signup');
 $('auth-form').onsubmit = async (e) => {
@@ -2068,7 +2396,7 @@ $('user-chip').onclick = async () => {
   await account.logout();
   toast('Logged out — driving as guest', 'ok', 2500);
 };
-$('btn-career').onclick = () => { $('career-modal').style.display = 'flex'; renderCareer(); };
+if ($('btn-career')) $('btn-career').onclick = () => { $('career-modal').style.display = 'flex'; renderCareer(); };
 $('car-close').onclick = () => { $('career-modal').style.display = 'none'; };
 account.onChange = () => { renderUserChip(); renderCareer(); };
 renderUserChip();

@@ -1,7 +1,7 @@
 import { RoutePath } from './path.js';
 import { Lane } from './lane.js';
 import { makeStationLayout, anchorLayout, appendStationTransitions, playerMain } from './stationLayout.js';
-import { OPEN_SCALE, MIN_OPEN_WORLD } from '../config.js';
+import { OPEN_SCALE, MIN_OPEN_WORLD, TRACK } from '../config.js';
 import { makeRng, range, smoothstep } from '../core/rng.js';
 import { stationName } from './stationNames.js';
 import { isTerminal } from './offlineSolver.js';
@@ -410,8 +410,42 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     return gtl.peak * (smootherstep(S.rise0, S.rise1, u) - smootherstep(S.fall0, S.fall1, u));
   };
 
+  // ---- Godavari widening after Rajahmundry toward Visakhapatnam (70 m between tracks, twin bridges).
+  let godavari = null;
+  for (let i = 0; i < stations.length - 1; i++) {
+    const a = stations[i].code, b = stations[i + 1].code;
+    if ((a === 'RJY' && b === 'SLO') || (a === 'SLO' && b === 'RJY')) {
+      const g = gaps[i];
+      const len = g.s1 - g.s0;
+      if (len >= 2100) {
+        const s0 = a === 'RJY' ? g.s0 + 60 : g.s1 - 1960;
+        const s1 = s0 + 1900;
+        godavari = { s0, s1, sMid: (s0 + s1) / 2, riverWidth: 1250, depth: 12, halfSep: 35, ramp: 320, dir: a === 'RJY' ? 1 : -1, gapIndex: i };
+      }
+      break;
+    }
+  }
+
+  // ---- Krishna river & twin bridges ~2 km before Vijayawada for trains from Guntur/Krishna Canal.
+  let krishna = null;
+  for (let i = 0; i < stations.length - 1; i++) {
+    const a = stations[i].code, b = stations[i + 1].code;
+    if (((a === 'KCC' || a === 'GNT') && b === 'BZA') || (a === 'BZA' && (b === 'KCC' || b === 'GNT'))) {
+      const g = gaps[i];
+      const len = g.s1 - g.s0;
+      if (len >= 1300) {
+        const s1 = b === 'BZA' ? Math.min(g.s1 - 200, g.s0 + len - 200) : Math.max(g.s0 + 200, g.s0 + 1600);
+        const span = Math.min(1500, len - 300);
+        const s0 = b === 'BZA' ? Math.max(g.s0 + 100, s1 - span) : g.s0 + 100;
+        const rW = Math.min(1000, Math.max(600, (s1 - s0) - 420));
+        krishna = { s0, s1: s0 + rW + 420, sMid: s0 + (rW + 420) / 2, riverWidth: rW, depth: 11, halfSep: 4.8, ramp: 210, gapIndex: i };
+      }
+      break;
+    }
+  }
+
   // rivers: the bed lowers the natural ground under the line, so the formation puts the track on a bridge
-  const rivers = planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm });
+  const rivers = planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm, godavari, krishna });
   const path = new RoutePath(total, curvatureAt, (sv) => undulation(sv) + flyover(sv), (sv) => undulation(sv) - riverCarve(rivers, sv));
 
   // ---- Biome lookup with smooth blends at junction stations.
@@ -455,6 +489,8 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     const st = stationAt(sv, 450);
     if (st) w = Math.max(Math.abs(st.layout.minLat), Math.abs(st.layout.maxLat)) + (st.category === 'metro' ? 330 : st.category === 'junction' ? 280 : 210);
     if (gtl && sv > gtl.s0 - 600 && sv < gtl.s1 + 1800) w = Math.max(w, 640);
+    if (godavari && sv > godavari.s0 - 200 && sv < godavari.s1 + 200) w = Math.max(w, 90);
+    if (krishna && sv > krishna.s0 - 200 && sv < krishna.s1 + 200) w = Math.max(w, 48);
     return w;
   };
 
@@ -469,6 +505,12 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
       const tr = st.layout.tracks.find((t) => t.no === choice.get(i)) || st.layout.tracks[0];
       appendStationTransitions(lane, st.layout, tr, { entry: true, exit: !st.isDest });
     }
+    for (const br of [godavari, krishna]) {
+      if (!br) continue;
+      lane.add(br.s0, br.s0 + br.ramp, -TRACK.MAIN_HALF, -br.halfSep);
+      lane.add(br.s0 + br.ramp, br.s1 - br.ramp, -br.halfSep, -br.halfSep);
+      lane.add(br.s1 - br.ramp, br.s1, -br.halfSep, -TRACK.MAIN_HALF);
+    }
     return lane;
   };
 
@@ -478,7 +520,7 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
   const trackMax = d.terminal ? d.layout.pEnd + 25 : total;
 
   return {
-    stations, gaps, path, total, trackMin, trackMax, gtl, gtlWest, rivers, curves, curveAt,
+    stations, gaps, path, total, trackMin, trackMax, gtl, gtlWest, godavari, krishna, rivers, curves, curveAt,
     realKmAt, sAtRealKm, biomeAt, stationAt, lineAt, gapAt, flatHalfWidth, buildLane,
     playerMainAt: (sv) => playerMain(lineAt(sv)),
     totalRealKm: plan.route.totalRealKm

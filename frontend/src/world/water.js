@@ -40,8 +40,14 @@ const LAKE_DENSITY = {
 };
 
 // ---- rivers along the route (route distance s), computed inside the layout before the path is built
-export function planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm }) {
+export function planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm, godavari = null, krishna = null }) {
   const rivers = [];
+  if (godavari) {
+    rivers.push({ s: godavari.sMid, width: godavari.riverWidth, depth: godavari.depth, name: 'Godavari', big: true, godavari: true });
+  }
+  if (krishna) {
+    rivers.push({ s: krishna.sMid, width: krishna.riverWidth, depth: krishna.depth, name: 'Krishna', big: true, krishna: true });
+  }
   const nearStation = (s, pad) => stations.some((st) => s > st.layout.zoneStart - pad && s < st.layout.zoneEnd + pad);
   // legs -> route km where each leg starts
   const legStart = new Map();
@@ -50,6 +56,7 @@ export function planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm }) {
     const list = RIVERS[g.leg.edgeId];
     if (!list) continue;
     for (const [rk, name, width, depth] of list) {
+      if (godavari && name === 'Godavari' && ['BZA_TO_VSKP', 'BZA_TO_RJY', 'RJY_TO_VSKP'].includes(g.leg.edgeId)) continue;
       const along = g.leg.reversed ? g.leg.distanceKm - rk : rk;
       let s = sAtRealKm(km + along);
       if (gaps.some((x) => x.special && s > x.s0 - 300 && s < x.s0 + x.specialLen + 300)) continue;
@@ -125,10 +132,35 @@ export class Water {
       this.coasts.push({ s0: st.layout.sCenter - 6000, s1: st.layout.sCenter + 6000, side, dist: Math.max(D, halfW + 450), level: path.groundAt(st.layout.sCenter) - 1.4, st });
     }
     this._hussainSagar(terrain);
-    // village tanks and ponds
+    // Lake across both sides of the track 10 km before Gooty (GTL -> GY), spanning 300 m on both sides (embankment, not bridge)
     const v = new THREE.Vector3();
+    for (let i = 0; i < L.stations.length - 1; i++) {
+      const a = L.stations[i], b = L.stations[i + 1];
+      if ((a.code === 'GTL' && b.code === 'GY') || (a.code === 'GY' && b.code === 'GTL')) {
+        const g = L.gaps[i];
+        const targetKm = b.code === 'GY' ? b.realKm - 10 : a.realKm + 10;
+        let sLake = L.sAtRealKm(targetKm);
+        sLake = Math.max(g.s0 + 350, Math.min(g.s1 - 350, sLake));
+        if (!L.stationAt(sLake, 350) && !this.rivers.some((r) => Math.abs(r.s - sLake) < r.width / 2 + 350)) {
+          path.pointAt(sLake, 0, v);
+          this.lakes.push({ x: v.x, z: v.z, r: 300, level: path.yAt(sLake) - 1.8, depth: 4.0, bund: false, bothSides: true });
+        }
+        break;
+      }
+    }
+    // village tanks and ponds (and occasional lakes across both sides of the track in open country)
     L.gaps.forEach((g, i) => {
       const rand = makeRng(this.seedKey, 'lakes', i);
+      if (rand() < 0.28 && g.s1 - g.s0 > 1200) {
+        const s = g.s0 + (g.s1 - g.s0) * (0.25 + 0.5 * rand());
+        if (!L.stationAt(s, 450) && !this.rivers.some((r) => Math.abs(r.s - s) < r.width / 2 + 450)
+          && !(g.special && s < g.s0 + g.specialLen + 400)
+          && !this.lakes.some((l) => l.bothSides && Math.hypot(l.x - path.pointAt(s, 0, v).x, l.z - v.z) < 900)) {
+          const r = range(rand, 180, 280);
+          path.pointAt(s, 0, v);
+          this.lakes.push({ x: v.x, z: v.z, r, level: path.yAt(s) - 1.8, depth: 3.8, bund: false, bothSides: true });
+        }
+      }
       const dens = LAKE_DENSITY[g.biome] ?? 0.8;
       const n = Math.round((g.realKm / 7) * dens * (0.5 + rand()));
       for (let k = 0; k < n; k++) {
@@ -173,11 +205,17 @@ export class Water {
   carve(x, z, near, h) {
     for (const c of this.cuts || []) h = carveCut(c, x, z, h);
     for (const l of this.lakes) {
+      if (l.bothSides && Math.abs(near.lat) < 7.5) continue; // keep the track causeway/embankment above the lake
       const d = Math.hypot(x - l.x, z - l.z);
       if (d > l.r * 1.45) continue;
       const k = d / l.r;
       const bed = l.level - l.depth * Math.max(0, 1 - k * k);
-      if (k < 1) h = Math.min(h, bed);
+      if (k < 1) {
+        if (l.bothSides && Math.abs(near.lat) < 12) {
+          const bankT = smooth((Math.abs(near.lat) - 7.5) / 4.5);
+          h = h + (Math.min(h, bed) - h) * bankT;
+        } else h = Math.min(h, bed);
+      }
       else h = Math.min(h, l.level + 0.25 + (h - l.level - 0.25) * smooth((k - 1) / 0.45)); // gentle banks
       if (l.bund && k > 1.02 && k < 1.18) h = Math.max(h, l.level + 1.1 * (1 - Math.abs(k - 1.1) / 0.08)); // tank bund
     }
@@ -200,7 +238,8 @@ export class Water {
     for (const l of this.lakes) if ((x - l.x) ** 2 + (z - l.z) ** 2 < (l.r * 1.25) ** 2) return true;
     for (const q of this._riverRects) {
       const dx = x - q.x, dz = z - q.z;
-      if (Math.abs(dx * q.F.x + dz * q.F.z) < q.r.width / 2 + 20 && Math.abs(dx * q.R.x + dz * q.R.z) < 3000) return true;
+      const maxSpan = (q.r.godavari || q.r.krishna) ? 8000 : 3000;
+      if (Math.abs(dx * q.F.x + dz * q.F.z) < q.r.width / 2 + 20 && Math.abs(dx * q.R.x + dz * q.R.z) < maxSpan) return true;
     }
     return false;
   }
@@ -220,7 +259,7 @@ export class Water {
         const th = path.headingAt(r.s);
         q4.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -th);
         pos.set(q.x, level, q.z);
-        sc.set(6000, 1, r.width * 0.92);
+        sc.set((r.godavari || r.krishna) ? 16000 : 6000, 1, r.width * 0.92);
         m4.compose(pos, q4, sc);
         rm.setMatrixAt(i, m4);
       });

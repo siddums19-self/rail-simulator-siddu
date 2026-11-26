@@ -65,13 +65,13 @@
     .kv span:nth-child(odd) { color: var(--muted); }
     /* strip map */
     #strip { flex: 1; max-width: 760px; align-self: flex-end; padding: 8px 14px; display: flex; flex-direction: column; justify-content: center; }
-    #strip-track { position: relative; height: 34px; margin-top: 4px; }
-    #strip-track .ln { position: absolute; left: 0; right: 0; top: 16px; height: 3px; background: #334155; border-radius: 3px; }
-    #strip-track .done { position: absolute; left: 0; top: 16px; height: 3px; background: var(--accent); border-radius: 3px; }
-    #strip-track .st { position: absolute; top: 11px; width: 2px; height: 13px; background: #64748b; }
+    #strip-track { position: relative; height: 42px; margin-top: 4px; }
+    #strip-track .ln { position: absolute; left: 0; right: 0; top: 12px; height: 3px; background: #334155; border-radius: 3px; }
+    #strip-track .done { position: absolute; left: 0; top: 12px; height: 3px; background: var(--accent); border-radius: 3px; }
+    #strip-track .st { position: absolute; top: 7px; width: 2px; height: 13px; background: #64748b; }
     #strip-track .st.halt { background: #e2e8f0; width: 4px; border-radius: 2px; }
-    #strip-track .st label { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font-size: 9.5px; color: var(--muted); white-space: nowrap; }
-    #strip-track .me { position: absolute; top: 9px; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 10px solid var(--accent); transform: translateX(-7px); }
+    #strip-track .st label { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); font-size: 9.5px; color: var(--muted); white-space: nowrap; line-height: 1.2; }
+    #strip-track .me { position: absolute; top: 5px; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 10px solid var(--accent); transform: translateX(-7px); }
     /* platform selector */
     #pf-panel { position: fixed; right: 12px; top: 176px; width: 228px; display: none; z-index: 12; padding: 8px 10px !important; }
     #pf-panel .title { font-size: 12.5px; }
@@ -315,11 +315,73 @@
     #sum-tt td { padding: 3px 4px; border-bottom: 1px solid rgba(148,163,184,.1); }
     #sum-tt td.late { color: #fca5a5; } #sum-tt td.early { color: #fbbf24; } #sum-tt td.ok { color: #86efac; }
     @media (max-width: 900px) { #strip { display: none; } #hint { display: none; } #route-modal { width: calc(100vw - 24px); } }
+    /* ---- Pause overlay ---- */
+    #pause-overlay { position: fixed; inset: 0; z-index: 55; display: none; align-items: center; justify-content: center;
+      background: rgba(2,6,18,.82); flex-direction: column; gap: 18px; }
+    #pause-overlay .pause-title { font-size: 42px; font-weight: 900; letter-spacing: 6px; color: #fde047; text-shadow: 0 0 30px rgba(253,224,71,.4); }
+    #pause-overlay .pause-sub { color: var(--muted); font-size: 14px; }
+    /* ---- Minimize toggles ---- */
+    .min-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 4px; min-height: auto; line-height: 1; }
+    .min-btn:hover { color: var(--text); }
+    .panel.minimized > *:not(.min-header):not(.min-btn) { display: none !important; }
+    .panel.minimized .tb-group, .panel.minimized #route-meta, .panel.minimized .row:not(.min-header) { display: none !important; }
+    .panel.minimized .title:not(.min-header) { display: none !important; }
+    #speedo.minimized .kv, #speedo.minimized #next-limit, #speedo.minimized #speedbar, #speedo.minimized #speed-lim-wrap { display: none !important; }
+    #speedo.minimized { min-width: 0 !important; width: auto !important; }
+    #campad.minimized { grid-template-columns: auto !important; min-width: 0 !important; }
+    #campad.minimized > *:not(.min-header) { display: none !important; }
+    /* ---- Dynamic control logos ---- */
+    #controls button { display: inline-flex; align-items: center; gap: 5px; transition: background .15s, border-color .15s, box-shadow .15s; }
+    .ctl-ico { width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .ctl-ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    #btn-up.lit { background: #14532d; border-color: #22c55e; box-shadow: 0 0 10px rgba(34,197,94,.45); }
+    #btn-dn.lit { background: #1e3a8a; border-color: #60a5fa; box-shadow: 0 0 10px rgba(96,165,250,.45); }
+    #btn-brk.lit { background: #7c2d12; border-color: #f97316; box-shadow: 0 0 10px rgba(249,115,22,.45); }
+    #btn-emg.lit { background: #991b1b; border-color: #ef4444; box-shadow: 0 0 14px rgba(239,68,68,.75); }
+    #horn-btn.lit { background: #854d0e; border-color: #facc15; box-shadow: 0 0 12px rgba(250,204,21,.6); }
+    /* ---- Strip map scroll ---- */
+    #strip-scroll { position: relative; overflow: hidden; }
+    #strip-viewport { overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; margin: 0 26px; }
+    #strip-viewport::-webkit-scrollbar { display: none; }
+    #strip-scroll #strip-track { min-width: 100%; }
+    .strip-arrow { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; background: rgba(15,22,36,.85);
+      border: 1px solid var(--line); color: var(--text); border-radius: 50%; width: 22px; height: 22px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; font-size: 12px; padding: 0; }
+    .strip-arrow.left { left: 2px; }
+    .strip-arrow.right { right: 2px; }
+    /* ---- Priority request ---- */
+    #btn-priority { display: none; }
+    #btn-priority.show { display: inline-block; animation: pulse-glow 1.5s ease-in-out infinite; }
+    @keyframes pulse-glow { 0%,100% { box-shadow: 0 0 6px rgba(59,130,246,.5); } 50% { box-shadow: 0 0 16px rgba(59,130,246,.9); } }
+    #priority-status { font-size: 10.5px; color: #93c5fd; margin-top: 2px; display: none; }
+    /* ---- Save/Load ---- */
+    #save-modal { position: fixed; inset: 0; z-index: 75; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
+    #save-modal .panel { width: 480px; max-width: 94vw; max-height: 80vh; overflow: auto; }
+    .save-slot { background: #111a2b; border-radius: 8px; padding: 10px 12px; margin-top: 8px; border: 1px solid #2c3e5a; cursor: pointer; }
+    .save-slot:hover { border-color: #60a5fa; }
+    .save-slot.empty { opacity: .55; }
+    .save-slot b { font-size: 13px; }
+    .save-slot small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .save-slot .row { margin-top: 6px; }
+    .save-slot input { flex: 1; background: #0b1322; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; font-size: 12px; }
+    /* ---- Playing Guide modal ---- */
+    #guide-modal { position: fixed; inset: 0; z-index: 80; display: none; align-items: center; justify-content: center; background: rgba(2,6,18,.82); }
+    #guide-modal .panel { width: 880px; max-width: 95vw; max-height: 90vh; overflow: auto; }
+    .guide-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+    .guide-tabs button.on { background: var(--blue); border-color: #60a5fa; }
+    .guide-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-top: 10px; }
+    .guide-item { background: #111a2b; border: 1px solid #2c3e5a; border-radius: 8px; padding: 8px 10px; cursor: pointer; text-align: left; }
+    .guide-item:hover, .guide-item.on { border-color: #60a5fa; background: #162540; }
+    .guide-item b { font-size: 12.5px; display: block; color: var(--text); }
+    .guide-item small { font-size: 11px; color: var(--muted); display: block; margin-top: 3px; line-height: 1.35; }
+    #guide-detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #0d1626; border: 1px solid #334155; font-size: 12.5px; }
+    #auth .card { position: relative; }
   </style>
 </head>
 <body>
   <div id="auth" role="dialog" aria-modal="true" aria-labelledby="auth-title">
     <div class="card">
+      <button type="button" id="auth-close" title="Close" style="position:absolute;top:10px;right:12px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:2px 6px;">✕</button>
       <h1 id="auth-title">INDIAN RAILWAYS 3D SIMULATOR</h1>
       <div class="muted" style="text-align:center;font-size:12.5px;margin-top:6px;">Log in to save your career, or drive as a guest.</div>
       <div class="tabs"><button type="button" id="auth-tab-login" class="on">Log in</button><button type="button" id="auth-tab-signup">Sign up</button></div>
@@ -344,8 +406,11 @@
   </div>
 
   <div id="top" class="hud">
-    <div class="panel" style="max-width: 520px;">
-      <div class="title" id="route-title"><button id="btn-menu" class="mobile-only" title="Menu">☰</button><button id="btn-mainmenu" class="mainmenu" title="Main menu">⌂</button><span id="route-title-text">Loading route…</span></div>
+    <div class="panel" id="left-panel" style="max-width: 520px;">
+      <div class="title min-header" id="route-title" style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+        <span><button id="btn-menu" class="mobile-only" title="Menu">☰</button><button id="btn-mainmenu" class="mainmenu" title="Main menu">⌂</button><span id="route-title-text">Loading route…</span></span>
+        <button class="min-btn" id="min-left" title="Minimize / expand">−</button>
+      </div>
       <div class="muted" id="route-meta" style="margin-top:2px;"></div>
       <div class="tb-group"><span class="tb-h">Journey</span>
         <button class="primary" id="btn-builder" data-i="🗺">Route &amp; Roster</button>
@@ -356,7 +421,11 @@
         <button id="btn-recorder" data-i="📈" title="Speed recorder chart">Recorder</button>
         <button id="btn-caution" data-i="⚠" title="Caution orders (T.409) in force">Caution</button>
         <button id="btn-photo" data-i="📷" title="Photo mode: hide the HUD, free camera, time of day, save a picture">Photo</button>
+        <button id="btn-pause" data-i="⏸" title="Pause / Resume simulation (Esc)">Pause</button>
+        <button id="btn-guide" data-i="📖" title="Open Playing Guide (pauses game)">Guide</button>
+        <button id="btn-priority" class="primary" data-i="⚡" title="Request priority at stations/junctions when running >30 min late">Ask Priority</button>
       </div>
+      <div id="priority-status"></div>
       <div class="tb-group"><span class="tb-h">Safety &amp; cab</span>
         <button id="btn-kavach" class="on tog" data-i="🛡" title="Kavach automatic train protection">Kavach</button>
         <button id="btn-busy" class="on tog" data-i="🚦" title="Congested stations hold the home signal">Busy stns</button>
@@ -367,8 +436,8 @@
       </div>
       <div class="tb-group"><span class="tb-h">Profile</span>
         <button id="btn-home" data-i="⌂" title="Back to the main menu (choose a mode)">Main menu</button>
-        <button id="btn-career" data-i="🎖" title="Career: rank, XP and run history">Career</button>
-        <button id="btn-stats" data-i="🏆" title="Statistics and top-10 leaderboards">Stats</button>
+        <button id="btn-save-game" data-i="💾" title="Save simulator progress till last station (signed-in users)" style="display:none;">Save</button>
+        <button id="btn-load-game" data-i="📂" title="Load / resume a saved game (signed-in users)" style="display:none;">Load</button>
         <button id="user-chip" data-i="👤" title="Account">Guest · Log in</button>
         <span class="badge" id="backend-badge">…</span>
       </div>
@@ -384,8 +453,11 @@
       </div>
     </div>
 
-    <div class="panel">
-      <div><b id="clock">07:15</b> <span class="muted">journey time</span></div>
+    <div class="panel" id="right-panel">
+      <div class="min-header" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div><b id="clock">07:15</b> <span class="muted">journey time</span></div>
+        <button class="min-btn" id="min-right" title="Minimize / expand">−</button>
+      </div>
       <div class="row">
         <select id="sel-weather" title="Weather">
           <option value="CLEAR">Clear sun</option>
@@ -470,7 +542,37 @@
         <div class="tile small" id="tile-peak"><span class="ti">🚉</span><b>Mumbai peak-hour challenge</b><small>Station Master at CSMT in the evening rush: locals every few seconds</small></div>
         <div class="tile small" id="tile-stats"><span class="ti">🏆</span><b>Statistics &amp; Top 10</b><small>Daily · weekly · monthly leaderboards</small></div>
         <div class="tile small" id="tile-career"><span class="ti">🎖️</span><b>Career</b><small>Rank, XP and run history</small></div>
+        <div class="tile small" id="tile-guide"><span class="ti">📖</span><b>Playing Guide</b><small>Train Simulation buttons, live station overview &amp; controls</small></div>
       </div>
+    </div>
+  </div>
+
+  <div id="guide-modal" role="dialog" aria-modal="true" aria-label="Train Simulator Playing Guide">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;margin-top:0;">
+        <div class="title" style="font-size:18px;">📖 Train Simulation · Playing Guide</div>
+        <div class="row" style="margin-top:0;">
+          <button class="primary" id="guide-drive">🚆 Open Simulator</button>
+          <button id="guide-close">Close</button>
+        </div>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:4px;">Live Guntakal Jn station view &amp; interactive guide for <b>Train Simulation</b> mode. Click any button below to see what it does.</div>
+      <div style="margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid #2c3e5a;background:#091224;position:relative;">
+        <img id="guide-photo" src="/guntakal-guide.png" alt="Guntakal Jn Live Station with Trains" style="width:100%;max-height:240px;object-fit:cover;display:block;">
+        <div style="position:absolute;bottom:8px;left:10px;background:rgba(15,22,36,.85);border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:11px;color:#fde047;">
+          <b>GUNTAKAL JN (GTL)</b> · Live Station Reference (WAP-7 + LHB Express &amp; Passenger Trains)
+        </div>
+      </div>
+      <div class="guide-tabs" id="guide-tabs">
+        <button class="on" data-gcat="all">All Buttons</button>
+        <button data-gcat="journey">Journey</button>
+        <button data-gcat="safety">Safety &amp; Cab</button>
+        <button data-gcat="controls">Driving Controls</button>
+        <button data-gcat="hud">Camera &amp; HUD</button>
+        <button data-gcat="save">Profile &amp; Save</button>
+      </div>
+      <div id="guide-detail">Click any button below to inspect its function and shortcut.</div>
+      <div class="guide-grid" id="guide-grid"></div>
     </div>
   </div>
 
@@ -602,8 +704,7 @@
   <div id="engine-panel" class="panel">
     <div class="title" id="engine-title">Engine change</div>
     <div class="muted" id="engine-sub" style="margin-top:2px;"></div>
-    <div class="row"><select id="engine-select"></select><button id="btn-engine">Shunter changes engine</button></div>
-    <div class="row"><button class="primary" id="btn-runround" title="Drive the relief loco round the train yourself: 15 km/h shunting limit, couple under 5 km/h">Run round yourself (shunting)</button></div>
+    <div class="row"><select id="engine-select"></select><button class="primary" id="btn-engine">Shunter changes engine</button></div>
   </div>
   <div id="tt-panel" class="panel">
     <div class="title">Working timetable</div>
@@ -653,17 +754,35 @@
     </div>
   </div>
   <div id="hint">Mouse: drag orbit · right-drag pan · wheel zoom &nbsp;|&nbsp; Trackpad: 2-finger swipe orbit · pinch zoom · Shift+swipe pan &nbsp;|&nbsp; Keys: ←↑→↓ orbit · Shift+arrows pan · +/− zoom · 1–9 / C cameras (1 front · 8 guard · 9 crew · V swap) · W/S throttle (S below N0 = dynamic brake on goods) · Space brake · H horn · P panto · A auto</div>
-  <div id="campad" class="panel" title="Camera: hold a button">
-    <div class="lbl">CAMERA</div>
+  <div id="campad" class="panel minimized" title="Camera: hold a button">
+    <div class="lbl min-header" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>CAMERA</span><button class="min-btn" id="min-cam" title="Minimize / expand">+</button></div>
     <button data-cam="in" title="Zoom in">＋</button><button data-cam="up" title="Tilt up">▲</button><button data-cam="out" title="Zoom out">－</button>
     <button data-cam="left" title="Orbit left">⟲</button><button data-cam="reset" title="Reset view">◎</button><button data-cam="right" title="Orbit right">⟳</button>
     <button data-cam="panL" title="Pan left">◀</button><button data-cam="down" title="Tilt down">▼</button><button data-cam="panR" title="Pan right">▶</button>
     <button data-cam="panU" title="Pan up" style="grid-column:1 / 2;">⤒</button><span></span><button data-cam="panD" title="Pan down">⤓</button>
   </div>
 
+  <div id="pause-overlay">
+    <div class="pause-title">PAUSED</div>
+    <div class="pause-sub">Simulation paused — press Resume or Esc to continue</div>
+    <button class="primary" id="btn-unpause" style="padding:10px 28px;font-size:15px;">▶ Resume</button>
+  </div>
+
+  <div id="save-modal" role="dialog" aria-modal="true">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;margin-top:0;"><div class="title" id="save-modal-title">Saved Games</div><button id="save-close">Close</button></div>
+      <div class="muted" id="save-modal-sub" style="font-size:11.5px;margin-top:2px;"></div>
+      <div id="save-new-wrap" class="row" style="margin-top:10px;display:none;"><button class="primary" id="btn-new-game" style="flex:1;">🚆 Start New Game</button></div>
+      <div id="save-slots-list"></div>
+    </div>
+  </div>
+
   <div id="bottom" class="hud">
-    <div class="panel" id="speedo">
-      <div><span class="big" id="speed">0</span> <span class="unit">km/h</span> <span class="muted" style="margin-left:8px;">limit <b id="limit">—</b></span></div>
+    <div class="panel minimized" id="speedo">
+      <div class="min-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div><span class="big" id="speed">0</span> <span class="unit">km/h</span> <span class="muted" id="speed-lim-wrap" style="margin-left:8px;">limit <b id="limit">—</b></span></div>
+        <button class="min-btn" id="min-speedo" title="Minimize / expand">+</button>
+      </div>
       <div class="muted" id="next-limit" style="font-size:11px;min-height:14px;"></div>
       <div id="speedbar"><i id="speedfill"></i><b id="speedlim"></b></div>
       <div class="kv">
@@ -680,19 +799,25 @@
     </div>
     <div class="panel" id="strip">
       <div style="display:flex;justify-content:space-between;gap:10px;"><b id="next-st">—</b><span><b id="delay" style="margin-right:10px;">On time</b><span class="muted" id="next-dist"></span></span></div>
-      <div id="strip-track"><div class="ln"></div><div class="done" id="strip-done"></div><div class="me" id="strip-me"></div></div>
+      <div id="strip-scroll">
+        <button class="strip-arrow left" id="strip-left" title="Scroll stations left">◀</button>
+        <div id="strip-viewport">
+          <div id="strip-track"><div class="ln"></div><div class="done" id="strip-done"></div><div class="me" id="strip-me"></div></div>
+        </div>
+        <button class="strip-arrow right" id="strip-right" title="Scroll stations right">▶</button>
+      </div>
     </div>
     <div class="panel" id="controls">
       <div class="row">
-        <button id="btn-up">Throttle + (W)</button>
-        <button id="btn-dn">Throttle − (S)</button>
+        <button id="btn-up"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span>Throttle + (W)</span></button>
+        <button id="btn-dn"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span><span>Throttle − (S)</span></button>
       </div>
       <div class="row" style="margin-top:6px;">
-        <button id="btn-brk">Brake (Space)</button>
-        <button id="btn-rel">Release (R)</button>
-        <button id="btn-emg" style="background:#7f1d1d;border-color:#ef4444;">EMG (E)</button>
-        <button id="horn-btn">HORN (H)</button>
-        <button id="btn-panto" class="on" title="Raise / lower the pantograph (P)">Panto: up</button>
+        <button id="btn-brk"><span class="ctl-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></svg></span><span>Brake (Space)</span></button>
+        <button id="btn-rel"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></span><span>Release (R)</span></button>
+        <button id="btn-emg" style="background:#7f1d1d;border-color:#ef4444;"><span class="ctl-ico"><svg viewBox="0 0 24 24"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span><span>EMG (E)</span></button>
+        <button id="horn-btn"><span class="ctl-ico"><svg viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg></span><span>HORN (H)</span></button>
+        <button id="btn-panto" class="on" title="Raise / lower the pantograph (P)"><span class="ctl-ico" id="panto-ico"><svg viewBox="0 0 24 24"><path d="M4 20h16M7 20l5-7 5 7M12 13l-4-5 4-4 4 4-4 5M6 4h12"/></svg></span><span id="panto-txt">Panto: up</span></button>
       </div>
     </div>
   </div>

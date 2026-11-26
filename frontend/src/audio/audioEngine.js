@@ -249,8 +249,8 @@ export class AudioEngine {
     setTimeout(() => this.hornStop(), duration * 1000);
   }
 
-  // Distant horn of a passing AI train (quieter, filtered, panned).
-  distantHorn(gain = 0.35, pan = 0, blast = 1.4) {
+  // Distant / crossing horn of an AI train (panning, distance-based volume swell, clear twin-tone).
+  distantHorn(gain = 0.35, pan = 0, blast = 1.4, peakFrac = null) {
     if (!this.ctx || !this.enabled) return;
     if (false && this.buffers.horn) { // other trains keep the synthesised horn (the recording is for our own loco only)
       const ctx = this.ctx, t = ctx.currentTime, b = this.buffers.horn;
@@ -267,20 +267,30 @@ export class AudioEngine {
       return;
     }
     const ctx = this.ctx, t = ctx.currentTime;
+    const dur = Math.max(0.5, blast);
     const out = ctx.createGain(); out.gain.setValueAtTime(0.0001, t);
-    out.gain.exponentialRampToValueAtTime(gain, t + 0.1);
-    out.gain.setValueAtTime(gain, t + 1.2);
-    out.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
-    const p = ctx.createStereoPanner(); p.pan.value = pan;
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1800;
+    if (peakFrac != null) {
+      // Dynamic approach swell: softer while far, loudest at engine/first bogies, then fades out
+      const tPeak = t + dur * Math.max(0.25, Math.min(0.85, peakFrac));
+      out.gain.exponentialRampToValueAtTime(Math.max(0.02, gain * 0.22), t + 0.12);
+      out.gain.exponentialRampToValueAtTime(Math.max(0.05, gain), tPeak);
+      out.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    } else {
+      out.gain.exponentialRampToValueAtTime(gain, t + 0.08);
+      out.gain.setValueAtTime(gain, t + Math.max(0.15, dur - 0.35));
+      out.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    }
+    const p = ctx.createStereoPanner(); p.pan.value = Math.max(-0.9, Math.min(0.9, pan));
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = peakFrac != null ? 3400 : 2400;
     out.connect(lp).connect(p).connect(this.master);
-    const bell = ctx.createBiquadFilter(); bell.type = 'peaking'; bell.frequency.value = 900; bell.Q.value = 1; bell.gain.value = 6;
+    if (this.reverb) { const wet = ctx.createGain(); wet.gain.value = 0.28; lp.connect(wet).connect(this.reverb); }
+    const bell = ctx.createBiquadFilter(); bell.type = 'peaking'; bell.frequency.value = 950; bell.Q.value = 1.1; bell.gain.value = 7;
     bell.connect(out);
     const pair = Math.random() < 0.5 ? [370, 440] : [277.2, 329.6];
     for (const f of pair) for (const c of [-5, 6]) {
       const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f * Math.pow(2, c / 1200);
-      const g = ctx.createGain(); g.gain.value = 0.09;
-      o.connect(g).connect(bell); o.start(t); o.stop(t + 1.7);
+      const g = ctx.createGain(); g.gain.value = peakFrac != null ? 0.15 : 0.11;
+      o.connect(g).connect(bell); o.start(t); o.stop(t + dur + 0.1);
     }
   }
 
@@ -575,6 +585,12 @@ export class AudioEngine {
     const sqF = ctx.createBiquadFilter(); sqF.type = 'highpass'; sqF.frequency.value = 1800;
     this.brakeSq.connect(sqF).connect(this.master);
     this.brakeSq.connect(this.reverb);
+    // Wheel-on-rail starting friction (low steel-on-steel rub/creak as the train pulls away from rest)
+    const sf = ctx.createBufferSource(); sf.buffer = this.noiseBuf; sf.loop = true; sf.playbackRate.value = 0.9;
+    const sfb = ctx.createBiquadFilter(); sfb.type = 'bandpass'; sfb.frequency.value = 780; sfb.Q.value = 2.6;
+    this.startFrictionGain = ctx.createGain(); this.startFrictionGain.gain.value = 0;
+    sf.connect(sfb).connect(this.startFrictionGain).connect(this.master);
+    sf.start();
     this._compT = 6; this._dieselPh = 0; this._prevBrake = 0; this._prevMoving = false;
   }
 
@@ -625,6 +641,9 @@ export class AudioEngine {
       this._sqFl += (this._sqFlT - this._sqFl) * Math.min(1, dt * 9);
       const sqk = bk > 0.12 && v > 0.12 && v < 13 ? bk * Math.pow(1 - v / 13, 1.4) * (v < 2.5 ? 1.4 : 1) * this._sqFl : 0;
       this.brakeSq.gain.setTargetAtTime(on * sqk * (interior ? 0.012 : 0.022), t, sqk > 0 ? 0.06 : 0.04);
+      // Wheel-on-rail starting friction when pulling away from standstill (0.1..7.5 m/s)
+      const sfEnv = (v > 0.08 && v < 7.5 && notch !== 0) ? Math.sin(Math.min(1, v / 7.5) * Math.PI) * (0.6 + 0.4 * Math.min(1, Math.abs(notch) / 4)) : 0;
+      if (this.startFrictionGain) this.startFrictionGain.gain.setTargetAtTime(on * sfEnv * (interior ? 0.055 : 0.095), t, 0.15);
       // driver's brake valve exhausting brake-pipe air on each application
 
       for (const { o, f } of this.brakeSqOsc) o.frequency.setTargetAtTime(f * (1 + (1 - v / 13) * 0.04), t, 0.2);
@@ -636,16 +655,6 @@ export class AudioEngine {
       const moving = v > 0.4;
       if (moving !== this._prevMoving && on) { this._clank(t, moving ? 0.22 : 0.14); if (!moving) this._click(t, 0.35, false); }
       this._prevMoving = moving;
-      // compressor cycling at standstill
-      if (!moving && on) {
-        this._compT -= dt;
-        if (this._compT < 0) { for (let k = 0; k < 10; k++) this._click(t + k * 0.11, 0.05, false); this._hiss(t + 1.2, 0.5, 0.03, 4000); this._compT = 9 + Math.random() * 7; }
-      }
-      // diesel exhaust beat
-      if (traction === 'diesel' && on) {
-        this._dieselPh += dt * (3 + (notch / 8) * 9);
-        if (this._dieselPh > 1) { this._dieselPh = 0; this._click(t, (0.02 + (notch / 8) * 0.05) * (interior ? 1.2 : 1), false); }
-      }
     }
     // monsoon soundscape
     const raining = weather === 'MONSOON' && this.enabled && this.rainGain;
@@ -706,30 +715,12 @@ export class AudioEngine {
     if (this.clatFile) {
       this.clatFile.playbackRate.setTargetAtTime(Math.max(0.3, v / 25), t, 0.3);
       this.clatFileGain.gain.setTargetAtTime(on * Math.min(0.6, v * 0.03), t, 0.3);
-    } else if (on && v > 0.8) {
-      // rail joints every 13 m (+ turnout frogs): two bogies => "ta-dak ... ta-dak"
+    } else if (on && v > 0.8 && onTurnout) {
+      // Soft turnout frog thump only (plain-track repetitive clicks removed to avoid cut-cut-cut sound)
       this._jointAcc += distanceStep;
-      const spacing = onTurnout ? 4.5 : 26;
-      while (this._jointAcc > spacing) {
-        this._jointAcc -= spacing;
-        // with the recorded ride sound playing, plain-track joints are already in the recording:
-        // only the points (frogs) still click, softly and without the low thump
-        if (this.rideSrc && !onTurnout) continue;
-        const soft = !!this.rideSrc;
-        const g = Math.min(0.5, 0.08 + v * 0.01) * (onTurnout ? 1.6 : 1) * vol;
-        const gapA = 2.56 / Math.max(v, 1);  // axle spacing / speed
-        const gapB = 14.8 / Math.max(v, 1);  // bogie centres / speed
-        const gg = soft ? g * 0.45 : g * 0.8;
-        this._click(t + 0.01, gg, onTurnout, !soft);
-        this._click(t + 0.01 + gapA, gg * 0.85, onTurnout, !soft);
-        if (gapB < 1.6) { this._click(t + 0.01 + gapB, gg * 0.7, onTurnout, !soft); this._click(t + 0.01 + gapB + gapA, gg * 0.6, onTurnout, !soft); }
-        if (soft) continue;
-        // the coaches behind: each coupled pair of bogies passes the same joint a coach-length later
-        const coach = 23.5 / Math.max(v, 1);
-        for (let k = 1; k <= 5 && coach * k < 2.4; k++) {
-          const gk = g * Math.pow(interior ? 0.55 : 0.68, k), tk = t + 0.01 + coach * k - 1.9 / Math.max(v, 1);
-          this._click(tk, gk, false, true); this._click(tk + gapA, gk * 0.85, false, true);
-        }
+      if (this._jointAcc > 8) {
+        this._jointAcc = 0;
+        this._click(t + 0.01, Math.min(0.18, 0.05 + v * 0.005) * vol, false, false);
       }
     }
   }

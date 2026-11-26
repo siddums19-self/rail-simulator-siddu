@@ -9,7 +9,7 @@ import { makeRng, range, pick } from './core/rng.js';
 //
 // update() returns effects for the physics: { tractionCut, forcedSpeed, extraTE, lurch }.
 
-const TYPES = ['cattle', 'hotAxle', 'ohe', 'signal', 'gate'];
+const TYPES = ['hotAxle', 'ohe', 'signal', 'gate'];
 const NAMES = { cattle: 'Cattle run-over', hotAxle: 'Hot axle', ohe: 'OHE fault: dead section', signal: 'Signal failure', gate: 'Level-crossing gate open', stall: 'Stalled on a rising gradient' };
 
 export class Incidents {
@@ -22,7 +22,7 @@ export class Incidents {
     this.dirty = true;
     this.lastShown = null;
     const km0 = layout.realKmAt(layout.stations[0].layout.pEnd);
-    this.nextKm = km0 + range(this.rand, 6, 12);
+    this.nextKm = km0 + range(this.rand, 27, 54);
     this.onAutoHorn = null;   // set by main: sound the horn for the auto driver
   }
 
@@ -83,7 +83,7 @@ export class Incidents {
     if (km < this.nextKm || sim.speed < 30 / 3.6) return fx;
     const order = TYPES.slice().sort(() => this.rand() - 0.5);
     for (const type of order) {
-      if (this[`_start_${type}`](sim)) { this.nextKm = km + range(this.rand, 18, 34); this.audio.beep?.(); return fx; }
+      if (this[`_start_${type}`](sim)) { this.nextKm = km + range(this.rand, 82, 155); this.audio.beep?.(); return fx; }
     }
     this.nextKm = km + 1.5; // nothing fits here: try again a little further on
     return fx;

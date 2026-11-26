@@ -8,6 +8,7 @@ import { makeRng, pick, range } from '../core/rng.js';
 import { PLATFORM_TOP, TRACK } from '../config.js';
 import { createPerson } from './people.js';
 import { buildStaticRake } from '../trains/consist.js';
+import { isJunctionStation } from './junctionSplits.js';
 
 // Builds one station in its local frame: X = lateral (right of travel),
 // -Z = direction of travel, origin at the platform centre, y = formation.
@@ -254,12 +255,17 @@ export function buildStation(st, layout, { seedKey, density = 1, people = [] }) 
 
   // ---------------------------------------------------------- boundary walls & town
   const farLat = bs < 0 ? L.maxLat + 6 : L.minLat - 6; // opposite side to the building
-  box(M.brick(), 0, farLat, 1.0, 0.3, 2.0, L.zoneEnd - L.zoneStart - 200, true);
+  // Keep boundary wall along the platforms only so it never cuts across diverging junction tracks at the throats
+  box(M.brick(), 0, farLat, 1.0, 0.3, 2.0, pLen + 10, true);
   // Town around the station: density and height grow with the station's importance.
   const cat = st.category === 'metro' ? 3 : st.category === 'junction' ? 2 : st.halt ? 1 : 0;
   const rowsN = [2, 3, 5, 7][cat], maxFloors = [2, 2, 4, 8][cat], fill = [0.45, 0.6, 0.8, 0.92][cat];
   // keep the town clear of Guntakal's school (left facing Gooty) and reservation complex (right)
   const avoid = [];
+  if (isJunctionStation(st)) {
+    // Keep town buildings clear of diverging junction split tracks beyond the platform ends
+    avoid.push((ds) => Math.abs(ds) > pLen / 2 - 20);
+  }
   let gtlAtpSide = 0;
   if (st.code === 'GTL') {
     const pv = layout.stations[st.index - 1];

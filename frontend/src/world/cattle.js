@@ -31,8 +31,8 @@ export class Cattle {
       if (rural(s)) {
         const group = new THREE.Group(); this.scene.add(group);
         const side = this.rand() < 0.5 ? -1 : 1, n = 2 + Math.floor(this.rand() * 5), cows = [];
-        for (let i = 0; i < n; i++) cows.push({ m: cow(this.rand), ds: (this.rand() - 0.5) * 40, lat: side * (9 + this.rand() * 18), yaw: this.rand() * 6.28, onLine: false, ph: this.rand() * 6 });
-        if (this.rand() < 0.35) { const c = cows[0]; c.onLine = true; c.lat = lane.at(s) + (this.rand() - 0.5); c.ds = 0; c.away = side; c.yaw = Math.PI / 2; } // one strays onto our line
+        for (let i = 0; i < n; i++) cows.push({ m: cow(this.rand), ds: (this.rand() - 0.5) * 40, lat: side * (11 + this.rand() * 18), yaw: this.rand() * 6.28, onLine: false, ph: this.rand() * 6 });
+        // Keep all cattle grazing safely beside the track; never place cattle on the running line.
         for (const c of cows) group.add(c.m);
         this.herds.push({ s, group, cows, hit: false });
       }

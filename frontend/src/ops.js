@@ -85,12 +85,14 @@ export class Operations {
         }
       }
       this.choices.set(st.index, this.defaultTrack(st).no);
-      // some stations are congested: the home signal is held and we wait outside
-      if (!st.isOrigin && !st.isDest && (st.halt || st.category !== 'station') && rand() < 0.4) {
+      // some stations are congested: the home signal is held and we wait outside (Vijayawada is especially busy)
+      const busyP = st.code === 'BZA' ? 0.72 : (PRIORITY[rakeType] ?? 3) >= 4 ? 0.2 : 0.4;
+      if (!st.isOrigin && !st.isDest && (st.halt || st.category !== 'station') && rand() < busyP) {
         st.busy = { hold: 35 + rand() * 55, t: 0, state: 'pending' };
       }
     }
     this.busyEnabled = true;
+    this.priorityStations = new Set(); // station indices where priority was granted (never overrides Rajdhani/Vande Bharat)
     this.lane = layout.buildLane(this.choices);
     this._buildSignals();
   }
@@ -215,8 +217,18 @@ export class Operations {
   _buildSignals() {
     const L = this.layout;
     const sigs = [];
+    const inRiver = (s) => L.rivers?.some((r) => Math.abs(s - r.s) < r.width / 2 + 25);
+    const bridgeLat = (s, defLat) => {
+      for (const br of [L.godavari, L.krishna]) {
+        if (br && s >= br.s0 && s <= br.s1) return -br.halfSep - 2.6;
+      }
+      return defLat;
+    };
     for (const st of L.stations) {
-      if (!st.isOrigin) sigs.push({ kind: 'Home', s: this.homeS(st), st, lat: playerMain(st.layout.entryLine) - 3.0 });
+      if (!st.isOrigin) {
+        const hs = this.homeS(st);
+        sigs.push({ kind: 'Home', s: hs, st, lat: bridgeLat(hs, playerMain(st.layout.entryLine) - 3.0) });
+      }
       if (!st.isDest) sigs.push({ kind: 'Starter', s: this.starterS(st), st });
     }
     // Intermediate block signals (automatic) on double-line sections: they split
@@ -231,10 +243,18 @@ export class Operations {
       for (let k = 0; k < n; k++) {
         let s = n === 1 ? (a + b) / 2 : a + ((b - a) * k) / (n - 1);
         if (this.avoidSignal) s = this.avoidSignal(s);
-        const sig = { kind: 'IBS', s, gap: g, lat: playerMain('D') - 3.0, no: `${prev.code}-${next.code} ${k + 1}` };
+        if (inRiver(s)) continue; // keep regular IBS poles out of the river water
+        const sig = { kind: 'IBS', s, gap: g, lat: bridgeLat(s, playerMain('D') - 3.0), no: `${prev.code}-${next.code} ${k + 1}` };
         ibs.push(sig); sigs.push(sig);
       }
     });
+    // Mount signals inside major bridges (Godavari & Krishna) on the bridge deck itself
+    for (const [br, name] of [[L.godavari, 'GODAVARI BRIDGE'], [L.krishna, 'KRISHNA BRIDGE']]) {
+      if (!br) continue;
+      const sSig = br.sMid + 120;
+      const sig = { kind: 'IBS', s: sSig, gap: L.gaps[br.gapIndex], lat: -br.halfSep - 2.5, no: name };
+      ibs.push(sig); sigs.push(sig);
+    }
     sigs.sort((p, q) => p.s - q.s);
     sigs.forEach((sg, i) => { sg.index = i; });
     this.sigs = sigs;
@@ -277,6 +297,7 @@ export class Operations {
       const tr = this.trackOf(st);
       if (this.pointsMoving && this.pointsMoving(st)) return { aspect: 'RED', featherDir: 0 };
       const div = isDiverging(st.layout, tr);
+      if (this.priorityStations.has(st.index) && st.busy && st.busy.state !== 'cleared') st.busy.state = 'cleared';
       if (this.busyEnabled && st.busy && st.busy.state !== 'cleared') return { aspect: 'RED', featherDir: 0, reason: 'Station busy — waiting for a platform' };
       // route interlocking: no proceed aspect while another train is on (or about to cross) our route through the throat
       const occ = st.occupancy.get(tr.no);
@@ -571,7 +592,7 @@ export class Traffic {
     const sF = this._front ?? t.s, d = Math.abs(t.s - sF);
     if (d > 2500) return;
     const lat = t.lane.at(t.s) - (this._lane ? this._lane.at(sF) : 0);
-    const gain = Math.min(0.55, 260 / (d + 60)) * (kind === 'near' ? 1 : 0.85);
+    const gain = Math.min(0.68, 320 / (d + 60)) * (kind === 'near' ? 1 : 0.85);
     const pan = Math.max(-0.85, Math.min(0.85, lat / 10 + (t.s > sF ? 0.1 : -0.1)));
     this.audio.distantHorn(gain, pan, kind === 'near' ? 1.8 : 1.4);
   }
@@ -642,6 +663,18 @@ export class Traffic {
   dispose() { for (const t of this.trains) t.consist.dispose(); this.trains = []; }
 
   clearAll() { this.dispose(); }
+
+  _opposingLane() {
+    const L = this.layout;
+    const lane = new Lane(TRACK.MAIN_HALF);
+    for (const br of [L.godavari, L.krishna]) {
+      if (!br) continue;
+      lane.add(br.s0, br.s0 + br.ramp, TRACK.MAIN_HALF, br.halfSep);
+      lane.add(br.s0 + br.ramp, br.s1 - br.ramp, br.halfSep, br.halfSep);
+      lane.add(br.s1 - br.ramp, br.s1, br.halfSep, TRACK.MAIN_HALF);
+    }
+    return lane;
+  }
 
   _spawnAhead(sFront) {
     const L = this.layout;
@@ -769,15 +802,19 @@ export class Traffic {
   _busyBlockers(sFront) {
     const ops = this.ops;
     if (!ops.busyEnabled) return;
+    const myP = PRIORITY[ops.rakeType] ?? 3;
     for (const st of this.layout.stations) {
       const b = st.busy;
       if (!b || b.state === 'cleared' || b.spawned) continue;
+      if (ops.priorityStations.has(st.index)) { b.state = 'cleared'; continue; }
       const h = ops.homeS(st);
       if (sFront < h - 3500 || sFront > h - 200) continue;
       b.spawned = true;
       const L = st.layout, track = ops.trackOf(st);
       if (st.occupancy.has(track.no)) continue; // something is already there: plain timed hold
       const goods = !track.pf;
+      // Express/passenger trains (LHB, Rajdhani, etc.) are never held behind a goods train
+      if (goods && myP >= 3) { b.state = 'cleared'; continue; }
       const bctx = { s: L.zoneEnd + 100, dir: 1 }; // it leaves ahead of us
       const rake = goods ? 'BOXN_GOODS' : ops.namer.pickRake(['LHB', 'ICF', 'ICF', 'DEMU_PASSENGER', 'LHB'], this.rand, bctx);
       const carLen = goods ? 10.7 : rake === 'ICF' || rake === 'DEMU_PASSENGER' ? 22 : 24;
@@ -823,7 +860,9 @@ export class Traffic {
     if (s0 < L.stations[0].layout.zoneEnd + 200) return;
     for (let x = s0; x < ops.homeS(st); x += 200) if (L.lineAt(x) !== 'D') return;
     const ctx = { s: s0, dir: 1 };
-    const list = (myP < 4 ? ['LHB', 'LHB', 'RAJDHANI', 'DURANTO', 'VANDE_BHARAT'] : ['RAJDHANI', 'DURANTO', 'VANDE_BHARAT']).filter((r) => (PRIORITY[r] ?? 0) > myP && this.ops.namer.allowed(r, ctx));
+    const hasPrio = ops.priorityStations.has(st.index);
+    const list = (myP < 4 ? ['LHB', 'LHB', 'RAJDHANI', 'DURANTO', 'VANDE_BHARAT'] : ['RAJDHANI', 'DURANTO', 'VANDE_BHARAT'])
+      .filter((r) => (PRIORITY[r] ?? 0) > myP && (!hasPrio || (PRIORITY[r] ?? 0) >= 5) && this.ops.namer.allowed(r, ctx));
     if (!list.length) return;
     const rake = pick(this.rand, list);
     // the overtaking train runs on the running lines through every station
@@ -868,9 +907,27 @@ export class Traffic {
         const rake = this.rand() < 0.2 ? 'BOXN_GOODS' : this.ops.namer.pickRake(TRAFFIC_MIX, this.rand, ctx);
         const consist = this.makeConsist(rake, rake === 'BOXN_GOODS' ? 22 : 9);
         this.scene.add(consist.group);
-        this.trains.push({ kind: 'oncoming', consist, s: s0, v: (rake === 'BOXN_GOODS' ? 65 : 105) / 3.6, lane: new Lane(TRACK.MAIN_HALF), dir: -1, horned: false, name: this.ops.namer.name(rake, this.rand, ctx) });
+        const lane = this._opposingLane();
+        this.trains.push({ kind: 'oncoming', consist, s: s0, v: (rake === 'BOXN_GOODS' ? 65 : 105) / 3.6, lane, dir: -1, horned: false, name: this.ops.namer.name(rake, this.rand, ctx) });
       }
       this.cooldown = 70 + this.rand() * 60;
+    }
+    // Sometimes spawn an oncoming train on the adjacent bridge while crossing Godavari / Krishna
+    for (const br of [L.godavari, L.krishna]) {
+      if (!br || br._aiChecked) continue;
+      if (sFront > br.s0 - 600 && sFront < br.sMid) {
+        br._aiChecked = true;
+        if (this.rand() < 0.5 && !this.trains.some((t) => t.kind === 'oncoming' && Math.abs(t.s - br.sMid) < 2200)) {
+          const s0 = Math.min(L.total - 300, br.s1 + 350 + this.rand() * 450);
+          if (L.lineAt(s0) === 'D') {
+            const ctx = { s: s0, dir: -1 };
+            const rake = this.rand() < 0.25 ? 'BOXN_GOODS' : this.ops.namer.pickRake(TRAFFIC_MIX, this.rand, ctx);
+            const consist = this.makeConsist(rake, rake === 'BOXN_GOODS' ? 24 : 11);
+            this.scene.add(consist.group);
+            this.trains.push({ kind: 'oncoming', consist, s: s0, v: (rake === 'BOXN_GOODS' ? 60 : 95) / 3.6, lane: this._opposingLane(), dir: -1, horned: false, name: this.ops.namer.name(rake, this.rand, ctx) });
+          }
+        }
+      }
     }
     if (this.aheadCooldown <= 0 && !this.trains.some((t) => t.kind === 'ahead')) {
       this._spawnAhead(sFront);
@@ -878,15 +935,23 @@ export class Traffic {
     }
     for (const [idx, cr] of this.ops.crossings) {
       const st = L.stations[idx];
-      if (cr.state === 'pending' && sFront > st.layout.zoneStart - 2500 && sFront < st.layout.pEnd) {
+      if (cr.state === 'pending' && sFront > st.layout.zoneStart - 3500 && sFront < st.layout.pEnd) {
         const consist = this.makeConsist(cr.rake, cr.rake === 'BOXN_GOODS' ? 22 : 8);
         this.scene.add(consist.group);
         const lane = new Lane(0);
         addTrackEntry(lane, st.layout, cr.track);
         addTrackExit(lane, st.layout, cr.track);
-        const tr = { kind: 'crossing', consist, s: st.layout.zoneEnd + 1600, v: 0, vmax: 60 / 3.6, lane, dir: -1, cr, st, horned: false };
+        const myP = PRIORITY[this.ops.rakeType] ?? 3;
+        const crP = PRIORITY[cr.rake] ?? 2;
+        // Goods trains (and lower-priority trains when we have priority) wait in the loop so our Express passes cleanly
+        const holdInLoop = (cr.rake === 'BOXN_GOODS' && myP >= 3)
+          || (this.ops.priorityStations.has(idx) && crP < 5);
+        const tr = holdInLoop
+          ? { kind: 'crossing', consist, s: st.layout.pStart + 14, v: 0, vmax: 60 / 3.6, lane, dir: -1, cr, st, horned: false, longHold: true }
+          : { kind: 'crossing', consist, s: st.layout.zoneEnd + 1600, v: 0, vmax: 60 / 3.6, lane, dir: -1, cr, st, horned: false };
+        if (holdInLoop) cr.state = 'cleared';
         this.trains.push(tr);
-        cr.state = 'approaching';
+        if (!holdInLoop) cr.state = 'approaching';
         cr.train = tr;
       }
     }
@@ -1017,7 +1082,10 @@ export class Traffic {
             t.state = 'running';
           }
         }
-        if (t.state === 'running' && t.s - rear < 3200 && playerSpeed * 3.6 > t.vmax * 3.6 + 5) this._planLoop(t, sFront);
+        if (t.state === 'running' && (
+          (t.s - rear < 3200 && playerSpeed * 3.6 > t.vmax * 3.6 + 5)
+          || (t.s - rear < 4500 && (PRIORITY[this.ops.rakeType] ?? 3) > (PRIORITY[t.consist.rakeType] ?? 2))
+        )) this._planLoop(t, sFront);
         if (t.state === 'toLoop' || t.state === 'waiting') {
           const S = t.loop.st.layout;
           const stop = S.pEnd - 14;
@@ -1050,7 +1118,7 @@ export class Traffic {
       t.s += t.dir * t.v * dt;
       t.consist.place(this.layout.path, t.lane, t.s, t.dir);
       const gap = Math.abs(t.s - sFront);
-      if (!t.horned && gap < 480 && t.kind !== 'ahead' && t.s > sFront) { t.horned = true; this._horn(t, 'near'); }
+      if (!t.horned && gap < 480 && t.kind !== 'ahead' && t.v > 0.5 && t.s > sFront) { t.horned = true; this._horn(t, 'near'); }
     }
     const keep = [];
     for (const t of this.trains) {

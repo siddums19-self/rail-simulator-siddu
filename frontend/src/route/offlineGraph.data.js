@@ -31,7 +31,8 @@ export const OFFLINE_HUBS = [{"code":"ATP","name":"Anantapur","platforms":3,"man
   {"code":"NZB","name":"Nizamabad Jn","platforms":4,"mandatoryReversal":false},
   {"code":"KZJ","name":"Kazipet Jn","platforms":4,"mandatoryReversal":false},
   {"code":"WL","name":"Warangal","platforms":3,"mandatoryReversal":false},
-  {"code":"NGP","name":"Nagpur Jn","platforms":8,"mandatoryReversal":false}];
+  {"code":"NGP","name":"Nagpur Jn","platforms":8,"mandatoryReversal":false},
+  {"code":"RJY","name":"Rajahmundry","platforms":5,"mandatoryReversal":false}];
 
 export const OFFLINE_EDGES = [{"edgeId":"WADI_TO_KYN","fromHub":"WADI","toHub":"KYN","distanceKm":551,"trackType":"DOUBLE_LINE_GHAT","biome":"WESTERN_GHATS_URBAN","stationsCsv":"WADI,KLBG,SUR,MO*,KWV,DD,PUNE,LNL,KJT*,KYN"},
   {"edgeId":"KYN_TO_CSMT","fromHub":"KYN","toHub":"CSMT","distanceKm":54,"trackType":"DOUBLE_LINE","biome":"URBAN_SUBURBAN","stationsCsv":"KYN,TNA,DR,CSMT"},
@@ -60,7 +61,8 @@ export const OFFLINE_EDGES = [{"edgeId":"WADI_TO_KYN","fromHub":"WADI","toHub":"
   {"edgeId":"MAS_TO_GTL","fromHub":"MAS","toHub":"GTL","distanceKm":443,"trackType":"DOUBLE_LINE","biome":"EASTERN_GHATS_DECCAN","stationsCsv":"MAS,PER*,AJJ,RU,KOU*,HX,YA,MOO*,TU,GY*,GTL"},
   {"edgeId":"MAS_TO_BZA","fromHub":"MAS","toHub":"BZA","distanceKm":431,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"EAST_COAST_DELTA","stationsCsv":"MAS,SPE*,GDR,NLR,KVZ*,OGL,CLX,BPP*,TEL,BZA"},
   {"edgeId":"DHNE_TO_BZA","fromHub":"DHNE","toHub":"BZA","distanceKm":366,"trackType":"SINGLE_LINE_WITH_LOOPS","biome":"NALLAMALA_COASTAL","stationsCsv":"DHNE,BMH*,NDL,GID*,CBM,MRK*,DKD*,VKN*,NRT,GNT,KCC*,BZA"},
-  {"edgeId":"BZA_TO_VSKP","fromHub":"BZA","toHub":"VSKP","distanceKm":350,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"GODAVARI_COAST","stationsCsv":"BZA,EE,TDD*,NDD*,RJY,SLO,ANV*,TUNI*,AKP*,DVD*,VSKP"},
+  {"edgeId":"BZA_TO_RJY","fromHub":"BZA","toHub":"RJY","distanceKm":149,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"GODAVARI_COAST","stationsCsv":"BZA,EE,TDD*,NDD*,RJY"},
+  {"edgeId":"RJY_TO_VSKP","fromHub":"RJY","toHub":"VSKP","distanceKm":201,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"GODAVARI_COAST","stationsCsv":"RJY,SLO,ANV*,TUNI*,AKP*,DVD*,VSKP"},
   {"edgeId":"VSKP_TO_BBS","fromHub":"VSKP","toHub":"BBS","distanceKm":443,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"EAST_COAST_BENGAL","stationsCsv":"VSKP,VZM,CHE,PSA,SPT*,IPM*,BAM,CAP*,BALU*,KUR,BBS"},
   {"edgeId":"BBS_TO_HWH","fromHub":"BBS","toHub":"HWH","distanceKm":437,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"EAST_COAST_BENGAL","stationsCsv":"BBS,CTC,BHC,BLS,KGP,MCA*,SRC,HWH"},
   {"edgeId":"ADI_TO_JP","fromHub":"ADI","toHub":"JP","distanceKm":620,"trackType":"MIXED_SINGLE_DOUBLE","biome":"ARAVALLI_RAJASTHAN","stationsCsv":"ADI,MSH,PNU,ABR,FA*,MJ,AII,FL*,JP"},

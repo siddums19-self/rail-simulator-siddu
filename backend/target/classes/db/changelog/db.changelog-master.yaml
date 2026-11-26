@@ -33,3 +33,5 @@ databaseChangeLog:
       file: db/changelog/016-guntakal-more-trains.sql
   - include:
       file: db/changelog/017-nagpur-howrah-delhi-links.sql
+  - include:
+      file: db/changelog/018-rajahmundry-hub.sql
