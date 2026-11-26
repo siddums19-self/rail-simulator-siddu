@@ -962,9 +962,9 @@ export class Traffic {
         const S = t.st.layout;
         const holdAt = S.zoneEnd + 120;
         const playerIn = sFront > S.pStart && playerSpeed < 0.5 && sFront <= S.pEnd + 30;
-        // we have stopped at (or just outside) the station for a while: control lets it in anyway, so a
-        // crossing can never lock up waiting for a move we can't make
-        const nearStill = playerSpeed < 0.5 && sFront > this.ops.homeS(t.st) - 400 && sFront <= S.pEnd + 60;
+        // we have stopped inside the station for a while: control lets it in anyway, so a
+        // crossing can never lock up waiting for a move we can't make (never release while player is outside pStart on single line)
+        const nearStill = playerSpeed < 0.5 && sFront >= S.pStart && sFront <= S.pEnd + 60;
         t.stillFor = nearStill ? (t.stillFor || 0) + dt : 0;
         const mayGo = playerIn || t.s < holdAt - 5 || t.stillFor > 30;
         const outside = (at) => (t.s - at > 0 ? Math.min(t.vmax, Math.sqrt(2 * 0.5 * Math.max(0, t.s - at))) : 0);
@@ -1001,6 +1001,7 @@ export class Traffic {
             if (t.s < stop + 4 && t.v < 0.3 && t.cr.state !== 'cleared') t.cr.state = 'cleared';
           }
         }
+        if (t.s > sFront && t.s - sFront < 180 && Math.abs(t.lane.at(sFront) - playerLane.at(sFront)) < 2.5) target = 0;
         t.v += Math.sign(target - t.v) * Math.min(Math.abs(target - t.v), 0.6 * dt);
         if (t.s + t.consist.length < S.pStart - 60 && t.cr.state !== 'cleared') t.cr.state = 'cleared';
         // a crossing train that stood in its loop sounds its horn as it moves off
@@ -1009,9 +1010,9 @@ export class Traffic {
       }
       if (t.kind === 'oncoming') {
         let conflictTop = -Infinity;
-        for (let s = sFront - 400; s < t.s; s += 15) if (Math.abs(playerLane.at(s) - TRACK.MAIN_HALF) < 1.2) conflictTop = s;
+        for (let s = sFront - trainLen; s < t.s; s += 5) if (Math.abs(playerLane.at(s) - t.lane.at(s)) < 2.4) conflictTop = s;
         if (conflictTop > -Infinity) {
-          const holdAt = conflictTop + 120;
+          const holdAt = Math.max(sFront + 140, conflictTop + 140);
           const dist = t.s - holdAt;
           if (dist < 0 && t.s - sFront > 700) { t.s = -1e9; continue; }
           const target = dist > 0 ? Math.min(t.v0 ?? t.v, Math.sqrt(2 * 0.6 * dist)) : 0;
