@@ -230,6 +230,17 @@ export class StationAudio {
     return true;
   }
 
+  // Direct Guard / Loco Pilot walkie-talkie radio voice (no PA chime delay)
+  radioSay(text, female = false) {
+    const gen = this.gen || 0;
+    const done = () => {};
+    if (this.voiceMode === 'cloud' && !(this.cloudDownUntil > performance.now())) {
+      this._cloudSay(text, female, gen, done);
+      return true;
+    }
+    return this._speak(text, { female, onend: done });
+  }
+
   // an announcement (chime, English, local repeat) is in progress
   busy() {
     return (this._talkUntil || 0) > performance.now() || this.cloudBusy || !!(window.speechSynthesis?.speaking || window.speechSynthesis?.pending); // the chime (~1.3 s), then the voice

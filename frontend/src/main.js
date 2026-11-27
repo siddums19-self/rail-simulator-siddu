@@ -562,7 +562,7 @@ function updatePlatformPanel() {
 // Goods locos have a dynamic (regenerative) brake: notching below N0 gives DB1..DB4.
 // At zero speed, clicking Throttle − engages Reverse gear (R1..R4) to move backward.
 function notch(d) {
-  if (state.speed < 0.05 && state.notch === 0 && d < 0 && !state.reverseMode) {
+  if (state.speed < 0.05 && state.notch <= 0 && d < 0 && !state.reverseMode) {
     state.reverseMode = true;
     state.notch = -1;
     state.brake = 0; state.emergency = false; state.auto = false; syncAuto();
@@ -628,7 +628,7 @@ const label = (v) => v.charAt(0).toUpperCase() + v.slice(1);
 function radioSpeak(text) {
   if (!audio.enabled || !audio.announcements) return;
   audio.radioChirp?.();
-  setTimeout(() => stationAudio.say(text, false), 140);
+  setTimeout(() => stationAudio.radioSay?.(text, false), 140);
 }
 function toggleLights() {
   state.lights = cycle(state.lights);
@@ -1308,16 +1308,63 @@ function renderMp(room) {
   if (!room) { panel.style.display = 'none'; return; }
   panel.style.display = 'block';
   const host = room.owner === mp.name;
-  $('mp-title').textContent = `🏁 Room ${room.code}${room.started ? ' · racing' : ' · lobby'}`;
   const rt = room.route || {};
-  $('mp-sub').textContent = room.started ? (rt.sub ? `${rt.sub.city} ${rt.sub.route}` : rt.preset || `${rt.src} → ${rt.dst} · ${RAKES[rt.rakeType]?.label || ''}`) : host ? 'Share the code with friends, then start the race' : `Waiting for ${room.owner} to start…`;
+  const isCoop = !!rt.coop;
+  const myRole = isCoop ? (host ? (rt.hostRole || 'driver') : ((rt.hostRole || 'driver') === 'driver' ? 'sm' : 'driver')) : 'driver';
+  mp.coopRole = isCoop ? myRole : null;
+  $('mp-title').textContent = `${isCoop ? '🤝 Co-Op' : '🏁 Room'} ${room.code}${room.started ? (isCoop ? ` · ${myRole === 'sm' ? 'Station Master' : 'Driver'}` : ' · racing') : ' · lobby'}`;
+  $('mp-sub').textContent = room.started ? (rt.sub ? `${rt.sub.city} ${rt.sub.route}` : rt.preset || `${rt.src} → ${rt.dst} · ${RAKES[rt.rakeType]?.label || ''}`) : host ? 'Share the code with friends, then start' : `Waiting for ${room.owner} to start…`;
   $('mp-start').style.display = host && !room.started ? '' : 'none';
   const list = [...room.players].sort((a, b) => (b.done - a.done) || (b.km - a.km) || (b.score - a.score));
   $('mp-table').innerHTML = list.map((p, i) => `<tr class="${p.name === mp.name ? 'me' : ''}"><td>${i + 1}</td><td>${p.name.replace(/</g, '')}${p.name === room.owner ? ' 👑' : ''}</td><td>${p.done ? '🏁' : `${(p.km || 0).toFixed(1)} km`}</td><td>${Math.round(p.speed || 0)} km/h</td><td>${p.score || 0}</td></tr>`).join('');
+  // Co-Op Driver <-> Station Master live sync
+  const coopBox = $('mp-coop');
+  if (coopBox) {
+    if (isCoop && room.started) {
+      coopBox.style.display = 'block';
+      const partner = list.find((p) => p.name !== mp.name);
+      if (myRole === 'sm') {
+        const dCoop = partner?.coop || {};
+        const stName = dCoop.nextStName || 'En route';
+        coopBox.innerHTML = `<div style="font-size:11.5px;margin-bottom:6px;">🚆 Driver <b>${partner?.name || 'Waiting…'}</b> · ${Math.round(partner?.speed || 0)} km/h · Next: <b>${stName}</b></div>
+          <div class="row" style="gap:5px;margin-top:0;flex-wrap:wrap;">
+            <button id="coop-clear" class="primary">🟢 Clear Signal</button>
+            <button id="coop-pf1">PF 1</button><button id="coop-pf2">PF 2</button>
+            <button id="coop-prio"${dCoop.prioReq ? ' class="primary"' : ''}>⚡ Grant Priority</button>
+          </div>`;
+        $('coop-clear').onclick = () => { mp.coopCmd = { ...(mp.coopCmd || {}), clearedSt: dCoop.nextSt ?? 0, ts: Date.now() }; toast('Cleared signal for Driver', 'ok', 2000); };
+        $('coop-pf1').onclick = () => { mp.coopCmd = { ...(mp.coopCmd || {}), pfNo: 1, pfSt: dCoop.nextSt ?? 0, ts: Date.now() }; toast('Routed Driver to PF 1', 'ok', 2000); };
+        $('coop-pf2').onclick = () => { mp.coopCmd = { ...(mp.coopCmd || {}), pfNo: 2, pfSt: dCoop.nextSt ?? 0, ts: Date.now() }; toast('Routed Driver to PF 2', 'ok', 2000); };
+        $('coop-prio').onclick = () => { mp.coopCmd = { ...(mp.coopCmd || {}), grantPrio: true, ts: Date.now() }; toast('Priority granted to Driver', 'ok', 2000); };
+      } else {
+        const smCoop = partner?.coop || {};
+        coopBox.innerHTML = `<div style="font-size:11.5px;color:#93c5fd;">🏛 Station Master: <b>${partner?.name || 'Waiting…'}</b></div>`;
+        if (smCoop.ts && smCoop.ts !== mp._lastSmTs && ops && layout) {
+          mp._lastSmTs = smCoop.ts;
+          if (typeof smCoop.clearedSt === 'number') {
+            const stObj = layout.stations[smCoop.clearedSt];
+            if (stObj?.busy) stObj.busy.state = 'cleared';
+            radioSpeak(`Driver from Station Master. Signal cleared at ${spokenName(stObj?.name || 'next station')}.`);
+          }
+          if (smCoop.pfNo && typeof smCoop.pfSt === 'number') {
+            const stObj = layout.stations[smCoop.pfSt];
+            const tk = stObj?.layout?.tracks?.find((t) => t.pf === smCoop.pfNo);
+            if (tk) { ops.chooseTrack(stObj, tk.no); toast(`🏛 SM routed you to ${tk.name}`, 'ok', 2800); }
+          }
+          if (smCoop.grantPrio) {
+            state.priorityOutcome = 'approved';
+            const nst = ops.nextStation(state.sFront);
+            if (nst) for (let i = nst.index; i < Math.min(layout.stations.length, nst.index + 3); i++) ops.priorityStations.add(i);
+            radioSpeak('Driver from Station Master. Priority granted on your section.');
+          }
+        }
+      }
+    } else coopBox.style.display = 'none';
+  }
   // other players on the progress strip
   const strip = $('strip-track');
   strip.querySelectorAll('.mp-dot').forEach((d) => d.remove());
-  if (room.started) for (const [i, p] of list.entries()) if (p.name !== mp.name && p.totalKm) {
+  if (room.started && !isCoop) for (const [i, p] of list.entries()) if (p.name !== mp.name && p.totalKm) {
     const d = document.createElement('i'); d.className = 'mp-dot'; d.title = p.name;
     d.style.left = `${Math.min(100, (100 * p.km) / p.totalKm)}%`; d.style.background = ['#f97316', '#22c55e', '#a855f7', '#ef4444', '#06b6d4', '#eab308', '#ec4899'][i % 7];
     strip.appendChild(d);
@@ -1325,6 +1372,13 @@ function renderMp(room) {
   if (room.started && !mp.racing) {
     mp.racing = true; hideHome();
     const r = room.route || {};
+    if (isCoop && myRole === 'sm') {
+      const srcCode = r.src || PRESETS[r.preset]?.src || 'GTL';
+      const smCode = ['GTL', 'SC', 'BZA', 'SBC', 'MAS', 'ATP', 'KZJ', 'CSMT'].includes(srcCode) ? srcCode : 'GTL';
+      smStart(smCode, 'endless');
+      toast(`🤝 Co-Op Station Master at ${smCode} — guide your Driver!`, 'ok', 4000);
+      return;
+    }
     if (r.weather) {
       state.weatherMode = r.weather === 'DYNAMIC' ? 'DYNAMIC' : null;
       state.weather = r.weather === 'DYNAMIC' ? 'CLEAR' : r.weather;
@@ -1344,7 +1398,12 @@ function renderMp(room) {
     else startRoute({ src: r.src, dst: r.dst, via: r.via || [], rakeType: r.rakeType || 'LHB', allStops: !!r.allStops, stops: r.stops || null, minutes: startMin, weather: state.weather });
   }
 }
+if ($('mp-mode')) $('mp-mode').onchange = (e) => {
+  if ($('mp-role')) $('mp-role').style.display = e.target.value === 'coop' ? '' : 'none';
+};
 const mpSettings = () => ({
+  coop: $('mp-mode')?.value === 'coop',
+  hostRole: $('mp-role')?.value || 'driver',
   weather: state.weatherMode || state.weather,
   minutes: state.liveTime ? nowMinutes() : Math.round(state.gameMinutes),
   fest: state.festSel,
@@ -1386,9 +1445,16 @@ $('tile-mp').onclick = (e) => { if (!e.target.closest('input,select,button')) $(
 $('mp-start').onclick = () => mp.start().then(() => renderMp({ ...mp.room, players: [...mp.players.values()] }));
 $('mp-leave').onclick = () => { mp.racing = false; mp.leave(); syncLockedControls(); };
 setInterval(() => { // our progress for the room
-  if (!mp.room || !layout || !mp.racing) return;
+  if (!mp.room || !mp.racing) return;
+  if (mp.coopRole === 'sm') {
+    mp.report({ km: 0, totalKm: 1, speed: 0, score: 0, late: 0, done: false, status: 'station master', coop: mp.coopCmd || {} });
+    return;
+  }
+  if (!layout) return;
   const total = layout.realKmAt(layout.total), km = Math.max(0, layout.realKmAt(state.sFront) - layout.realKmAt(layout.stations[0].layout.pEnd));
-  mp.report({ km, totalKm: total, speed: state.speed * 3.6, score: scorer ? scorer.total() : 0, late: 0, done: !!state.summaryShown, status: state.summaryShown ? 'finished' : 'driving' });
+  const nst = ops?.nextStation(state.sFront);
+  const coop = mp.coopRole === 'driver' ? { nextSt: nst?.index ?? null, nextStName: nst?.name || '', prioReq: state.priorityReqStation != null } : undefined;
+  mp.report({ km, totalKm: total, speed: state.speed * 3.6, score: scorer ? scorer.total() : 0, late: 0, done: !!state.summaryShown, status: state.summaryShown ? 'finished' : 'driving', coop });
   if (state.summaryShown && !mp.finished) { mp.finished = true; achievements({ kind: 'mp' }); }
 }, 1000);
 
@@ -1623,7 +1689,7 @@ function physics(dt, fx = {}) {
   // Kavach (Automatic Train Protection): brakes for red signals and overspeed
   let brakePct = state.brake;
   state.kavachActive = null;
-  if (state.kavach && !state.auto) {
+  if (state.kavach && !state.auto && !state.reverseMode) {
     const k = ops.kavach(state.sFront, v, consist.length);
     if (k.demand > 0) {
       state.kavachActive = k.reason;
@@ -2145,6 +2211,35 @@ renderer.setAnimationLoop(() => {
 
   const { night } = sky.update(state.gameMinutes, state.weather, camera, tmpV, rawDt);
   state.night = night;
+  // Monsoon lightning flash + delayed thunder
+  if (state.weather === 'MONSOON' && !state.paused) {
+    state._nextLightning = (state._nextLightning ?? 12) - rawDt;
+    if (state._nextLightning <= 0) {
+      state._nextLightning = 14 + Math.random() * 16;
+      state._flashT = 0.18;
+      setTimeout(() => audio.crash?.(0.16), 900 + Math.random() * 900);
+    }
+    if (state._flashT > 0) {
+      state._flashT = Math.max(0, state._flashT - rawDt);
+      sky.sun.intensity += 3.5;
+    }
+  }
+  // Journey Highlight snapshots (origin, landmarks/tunnels, destination)
+  if (!state._hlSet && layout) state._hlSet = new Set();
+  if (layout && (state.highlights?.length || 0) < 4) {
+    let hlTag = null;
+    if (state.speed * 3.6 > 25 && !state._hlSet.has('dep')) hlTag = ['dep', `Departing ${layout.stations[0].name}`];
+    else if (layout.dudhsagar && Math.abs(state.sFront - layout.dudhsagar.sMid) < 120 && !state._hlSet.has('dds')) hlTag = ['dds', 'Crossing Dudhsagar Falls'];
+    else if (layout.godavari && Math.abs(state.sFront - layout.godavari.sMid) < 250 && !state._hlSet.has('god')) hlTag = ['god', 'Godavari Twin Bridges'];
+    else if (layout.krishna && Math.abs(state.sFront - layout.krishna.sMid) < 250 && !state._hlSet.has('kri')) hlTag = ['kri', 'Krishna River Bridge'];
+    else if (layout.tunnels?.some((t) => state.sFront >= t.s0 && state.sFront - consist.length <= t.s1) && !state._hlSet.has('tun')) hlTag = ['tun', 'Entering Hill Tunnel'];
+    if (hlTag) {
+      state._hlSet.add(hlTag[0]);
+      try {
+        (state.highlights ||= []).push({ label: hlTag[1], url: renderer.domElement.toDataURL('image/jpeg', 0.65) });
+      } catch { /* ignore tainted canvas */ }
+    }
+  }
   updateNightEmissives(night);
   if (state.flash > 0) { // lightning
     const f = state.flash * (0.6 + 0.4 * Math.sin(now * 0.09));
@@ -2480,6 +2575,10 @@ function renderTimetable() {
 function showSummary() {
   if (state.summaryShown) return;
   state.summaryShown = true;
+  if ($('sum-highlights')) {
+    const hs = state.highlights || [];
+    $('sum-highlights').innerHTML = hs.map((h) => `<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;overflow:hidden;"><img src="${h.url}" style="width:100%;height:110px;object-fit:cover;display:block;"><div style="padding:4px 8px;font-size:11px;color:#cbd5e1;">📸 ${h.label}</div></div>`).join('');
+  }
   const st = layout.stations[layout.stations.length - 1];
   const a = timetable.actual.get(st.index) || {};
   const late = a.arr !== undefined ? minDiff(a.arr, timetable.rows[st.index].arr) : 0;

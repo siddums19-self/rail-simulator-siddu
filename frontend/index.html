@@ -572,8 +572,10 @@
           <button class="primary" id="go-station">Start</button></span></div>
         <div class="tile" id="tile-ctl"><span class="ti">📈</span><b>Section Controller</b><small>Plan crossings on the Guntakal – Dhone single line on a live time–distance chart</small></div>
 
-        <div class="tile" id="tile-mp"><span class="ti">🏁</span><b>Multiplayer race</b><small>Create a room with a 4-digit code (you choose the route) or join a friend's room — everyone drives the same route, live standings</small>
+        <div class="tile" id="tile-mp"><span class="ti">🏁</span><b>Multiplayer (Race &amp; Co-Op)</b><small>Race friends on the same route, or team up as <b>Driver + Station Master</b></small>
           <span class="tile-opts"><input id="mp-code" maxlength="4" inputmode="numeric" placeholder="4-digit code" style="width:110px;">
+          <select id="mp-mode" title="Multiplayer mode"><option value="race">🏁 Race (All Drive)</option><option value="coop">🤝 Co-Op (Driver + SM)</option></select>
+          <select id="mp-role" title="Your role in Co-Op" style="display:none;"><option value="driver">🚆 Host: Driver</option><option value="sm">🏛 Host: Station Master</option></select>
           <select id="mp-route"><option value="custom">My own route… (choose in Route &amp; Roster)</option><option value="gtl-sc">Guntakal → Secunderabad</option><option value="gtl-krnt">Guntakal → Kurnool</option><option value="sbc-gtl">Bengaluru → Guntakal</option><option value="mas-bza">Chennai → Vijayawada</option><option value="wadi-csmt">Wadi → Mumbai CSMT</option><option value="hyb-ubl">Hyderabad → Hubballi</option></select>
           <button class="primary" id="mp-create">Create room</button><button id="mp-join">Join</button></span></div>
         <div class="tile" id="tile-daily"><span class="ti">📅</span><b>Daily challenge</b><small id="daily-desc">Same route, train, weather and time for everyone today — one shot at the daily top 10</small></div>
@@ -635,8 +637,9 @@
   </div>
 
   <div id="mp-panel" class="panel">
-    <div class="row" style="margin-top:0;justify-content:space-between;"><b id="mp-title">Room</b><span><button id="mp-start" class="primary" style="display:none;">▶ Start race</button> <button id="mp-leave" class="danger">Leave</button></span></div>
+    <div class="row" style="margin-top:0;justify-content:space-between;"><b id="mp-title">Room</b><span><button id="mp-start" class="primary" style="display:none;">▶ Start</button> <button id="mp-leave" class="danger">Leave</button></span></div>
     <div class="muted" id="mp-sub" style="font-size:11px;margin-top:3px;"></div>
+    <div id="mp-coop" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid rgba(148,163,184,.2);"></div>
     <table id="mp-table"></table>
   </div>
   <div id="photo-bar" class="panel">
@@ -802,6 +805,7 @@
     <div class="panel" style="max-width:960px;max-height:92vh;overflow:auto;">
       <div class="title" style="font-size:18px;">Journey summary</div>
       <div id="sum-stats"></div>
+      <div id="sum-highlights" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;margin-top:10px;"></div>
       <div id="sum-tt"></div>
       <canvas id="sum-chart" width="900" height="260" style="margin-top:10px;"></canvas>
       <div id="sum-events" class="muted" style="font-size:11.5px;margin-top:6px;max-height:120px;overflow:auto;"></div>

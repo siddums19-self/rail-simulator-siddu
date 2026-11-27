@@ -342,7 +342,7 @@ export class World {
     this.lastBuild = '';
     const L = this.layout;
     const C = STREAM.CHUNK;
-    const i0 = Math.max(0, Math.floor((sFocus - Math.max(STREAM.BEHIND, this.behind || 0)) / C)); // behind: long trains keep their track
+    const i0 = Math.max(0, Math.floor((sFocus - Math.max(STREAM.BEHIND, (this.behind || 0) + 400)) / C)); // behind: keep track for reversing & long trains
     const i1 = Math.min(Math.floor(L.total / C), Math.floor((sFocus + STREAM.AHEAD) / C));
     const want = new Set();
     for (let i = i0; i <= i1; i++) want.add(i);

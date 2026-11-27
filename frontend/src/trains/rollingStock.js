@@ -377,6 +377,16 @@ export function buildCoach(kind, code = 'B1', opts = {}) {
   }
   const gw2 = new THREE.Mesh(new THREE.BoxGeometry(1.15, 2.15, 0.42), RUBBER());
   gw2.position.set(0, 2.35, L / 2 + 0.2); gw2.userData.rearGangway = true; v.group.add(gw2);
+  // Interior window seat & luggage rack around z = 0 for camera 5 (Passenger window)
+  if (!opts.noseFront) {
+    const seatMat = std(0x1d4ed8, 0.75), rackMat = std(0xcbd5e1, 0.4, 0.7);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.14, 0.55), seatMat);
+    seat.position.set(1.05, 1.52, -0.55); v.group.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.65, 0.12), seatMat);
+    back.position.set(1.05, 1.88, -0.8); v.group.add(back);
+    const rack = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.04, 1.4), rackMat);
+    rack.position.set(1.22, 3.02, 0); v.group.add(rack);
+  }
   // underframe: skirt + equipment
   const skirt = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.42, L - 6.5), std(0x2b2f34, 0.5, 0.6));
   skirt.position.set(0, 0.86, 0); v.group.add(skirt);

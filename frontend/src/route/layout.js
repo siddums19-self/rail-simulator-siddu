@@ -519,11 +519,11 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     const origin = stations[0];
     const t0 = origin.layout.tracks.find((t) => t.no === choice.get(0)) || origin.layout.tracks[0];
     const lane = new Lane(t0.o);
-    appendStationTransitions(lane, origin.layout, t0, { entry: false, exit: true });
+    appendStationTransitions(lane, origin.layout, t0, { entry: !origin.terminal, exit: true });
     for (let i = 1; i < stations.length; i++) {
       const st = stations[i];
       const tr = st.layout.tracks.find((t) => t.no === choice.get(i)) || st.layout.tracks[0];
-      appendStationTransitions(lane, st.layout, tr, { entry: true, exit: !st.isDest });
+      appendStationTransitions(lane, st.layout, tr, { entry: true, exit: !st.terminal });
     }
     for (const br of [godavari, krishna]) {
       if (!br) continue;
