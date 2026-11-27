@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <title>Indian Railways 3D Simulator v6</title>
+  <title>Indian Rail Simulator</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230f172a'/%3E%3Crect x='14' y='12' width='36' height='34' rx='8' fill='%23dc2626' stroke='%23f5c518' stroke-width='2.5'/%3E%3Crect x='20' y='18' width='24' height='11' rx='3' fill='%23bae6fd'/%3E%3Ccircle cx='23' cy='38' r='3.5' fill='%23fde047'/%3E%3Ccircle cx='41' cy='38' r='3.5' fill='%23fde047'/%3E%3Cpath d='M18 52h28M22 46l-6 8M42 46l6 8' stroke='%2394a3b8' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
   <style>
     :root {
       --panel: rgba(10, 16, 28, 0.78);
@@ -143,7 +144,12 @@
     #ach-list div { background: #111a2b; border-radius: 8px; padding: 6px 8px; font-size: 11.5px; opacity: .45; } #ach-list div.got { opacity: 1; outline: 1px solid #22c55e; }
     body.mobile #mp-panel { top: auto; bottom: 150px; right: 6px; width: min(260px, 60vw); }
     /* toolbar: grouped, icons via data-i (text can change without losing the icon), clear on/off toggles */
-    .tb-group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(148,163,184,.15); }
+    .tb-group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(148,163,184,.15); }
+    #left-panel .tb-group button { padding: 4px 7px; font-size: 11.5px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; line-height: 1.2; }
+    #left-panel .tb-group button.tog { padding: 5px 24px 5px 9px; white-space: nowrap; }
+    #btn-lights.on { background: #854d0e; border-color: #facc15; color: #fef08a; }
+    #btn-lights.auto-on { background: #1e3a5f; border-color: #60a5fa; color: #dbeafe; }
+    #btn-lights.auto-on::after { background: #60a5fa; box-shadow: 0 0 6px #60a5fa; }
     .tb-group:first-of-type { border-top: 0; padding-top: 0; }
     .tb-h { width: 100%; font-size: 9.5px; letter-spacing: .7px; text-transform: uppercase; color: var(--muted); font-weight: 700; }
     button[data-i]::before { content: attr(data-i); margin-right: 5px; }
@@ -172,7 +178,7 @@
     body.mobile #speedo .big { font-size: 30px; } body.mobile #speedo { min-width: 0 !important; width: auto !important; max-width: 36vw; }
     body.mobile #controls { max-width: 58vw; } body.mobile #controls .row { flex-wrap: wrap; gap: 4px; }
     body.mobile #controls button { flex: 1 1 30%; }
-    body.mobile #campad { transform: scale(0.8); transform-origin: bottom right; right: 4px; bottom: 150px; }
+    body.mobile #campad { transform: scale(0.8); transform-origin: bottom right; right: 4px; bottom: 175px; }
     body.mobile #hint, body.mobile #strip { display: none !important; }
     body.mobile .modal .panel, body.mobile #route-modal { width: calc(100vw - 16px) !important; max-width: calc(100vw - 16px) !important; left: 8px; max-height: 82vh; }
     body.mobile #pf-panel { max-width: 56vw; font-size: 11px; }
@@ -233,10 +239,16 @@
     .sec-help { font-size: 11px; line-height: 1.5; margin-top: 10px; }
     @media (max-width: 900px) { #sec { flex-direction: column; } #sec-panel { width: auto; max-height: 45vh; } }
     #solved { margin-top: 10px; font-size: 11.5px; color: #cbd5e1; line-height: 1.55; }
-    #toast { position: fixed; top: 96px; left: 50%; transform: translateX(-50%); z-index: 30; display: none; padding: 9px 18px;
-      border-radius: 10px; font-weight: 700; font-size: 13px; background: rgba(15,23,42,.92); border: 1px solid #475569; }
-    #toast.warn { background: rgba(153,27,27,.94); border-color: #fca5a5; }
-    #toast.ok { background: rgba(20,83,45,.94); border-color: #86efac; }
+    #toast { position: fixed; top: 88px; left: 50%; transform: translateX(-50%); z-index: 30; display: flex; flex-direction: column; align-items: center; gap: 6px;
+      pointer-events: none; max-width: min(560px, 92vw); }
+    .toast-item { pointer-events: auto; display: flex; align-items: center; gap: 10px; padding: 7px 12px 7px 14px; border-radius: 10px;
+      font-weight: 700; font-size: 12.5px; line-height: 1.35; background: rgba(15,23,42,.92); border: 1px solid #475569;
+      box-shadow: 0 6px 20px rgba(0,0,0,.45); transition: opacity .22s ease, transform .22s ease; }
+    .toast-item.warn { background: rgba(153,27,27,.94); border-color: #fca5a5; }
+    .toast-item.ok { background: rgba(20,83,45,.94); border-color: #86efac; }
+    .toast-item.out { opacity: 0; transform: translateY(-6px); }
+    .toast-x { background: transparent; border: none; color: inherit; opacity: .75; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+    .toast-x:hover { opacity: 1; }
     #hint { position: fixed; bottom: 112px; left: 50%; transform: translateX(-50%); font-size: 11px; color: #cbd5e1; z-index: 9;
       background: rgba(5,8,15,.55); padding: 4px 12px; border-radius: 20px; pointer-events: none; white-space: nowrap; }
     #controls .row { margin-top: 0; }
@@ -258,9 +270,11 @@
     #sum-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
     #sum-stats div { display: flex; flex-direction: column; background: #111a29; padding: 8px 10px; border-radius: 8px; }
     #incident { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: rgba(60,0,0,.25); }
-    #controls button { min-width: 64px; }
+    #controls { display: flex; flex-direction: column; gap: 6px; }
+    .ctl-grid { display: grid; grid-template-columns: repeat(5, minmax(84px, auto)); gap: 6px; align-items: stretch; }
+    #controls button { min-width: 0; width: 100%; justify-content: flex-start; padding: 6px 8px; font-size: 11.5px; white-space: nowrap; flex-shrink: 0; }
     #horn-btn { background: #92400e; border-color: #f59e0b; font-weight: 700; }
-    #campad { position: fixed; right: 12px; bottom: 128px; z-index: 11; padding: 8px; display: grid;
+    #campad { position: fixed; right: 12px; bottom: 148px; z-index: 11; padding: 8px; display: grid;
       grid-template-columns: repeat(3, 34px); gap: 4px; }
     #campad button { width: 34px; height: 30px; padding: 0; font-size: 15px; touch-action: none; user-select: none; }
     #campad .lbl { grid-column: 1 / 4; text-align: center; font-size: 10px; color: var(--muted); }
@@ -332,8 +346,8 @@
     #campad.minimized > *:not(.min-header) { display: none !important; }
     #pf-panel.minimized #pf-selected { display: block !important; }
     /* ---- Dynamic control logos ---- */
-    #controls button { display: inline-flex; align-items: center; gap: 5px; transition: background .15s, border-color .15s, box-shadow .15s; }
-    .ctl-ico { width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    #controls button { display: inline-flex; align-items: center; gap: 4px; transition: background .15s, border-color .15s, box-shadow .15s; }
+    .ctl-ico { width: 13px; height: 13px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .ctl-ico svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     #btn-up.lit { background: #14532d; border-color: #22c55e; box-shadow: 0 0 10px rgba(34,197,94,.45); }
     #btn-dn.lit { background: #1e3a8a; border-color: #60a5fa; box-shadow: 0 0 10px rgba(96,165,250,.45); }
@@ -351,8 +365,16 @@
     .strip-arrow.left { left: 2px; }
     .strip-arrow.right { right: 2px; }
     /* ---- Priority request ---- */
-    #btn-priority { display: none; }
-    #btn-priority.show { display: inline-block; animation: pulse-glow 1.5s ease-in-out infinite; }
+    @keyframes prio-blink {
+      0%, 100% { background: #1e293b; border-color: #475569; box-shadow: none; }
+      50% { background: #2563eb; border-color: #60a5fa; box-shadow: 0 0 12px rgba(59,130,246,.65); }
+    }
+    #btn-priority, #controls #btn-priority-ctl { display: none; }
+    #btn-priority.show { display: inline-block; animation: prio-blink 1.2s ease-in-out infinite; }
+    #controls #btn-priority-ctl { justify-content: center; text-align: center; }
+    #controls #btn-priority-ctl.show { display: inline-flex; animation: prio-blink 1.2s ease-in-out infinite; }
+    #btn-priority.prio-ok, #controls #btn-priority-ctl.prio-ok { animation: none !important; background: #15803d; border-color: #86efac; color: #fff; }
+    #btn-priority.prio-denied, #controls #btn-priority-ctl.prio-denied { animation: none !important; background: #b91c1c; border-color: #fca5a5; color: #fff; }
     @keyframes pulse-glow { 0%,100% { box-shadow: 0 0 6px rgba(59,130,246,.5); } 50% { box-shadow: 0 0 16px rgba(59,130,246,.9); } }
     #priority-status { font-size: 10.5px; color: #93c5fd; margin-top: 2px; display: none; }
     /* ---- Save/Load ---- */
@@ -378,7 +400,7 @@
     #guide-detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #0d1626; border: 1px solid #334155; font-size: 12.5px; }
     #auth .card { position: relative; }
     /* ---- Live Train Radar ---- */
-    #radar-panel { position: fixed; right: 12px; bottom: 118px; width: 280px; max-width: calc(100vw - 24px); display: none; z-index: 13; border-color: #38bdf8; }
+    #radar-panel { position: fixed; right: 12px; bottom: 292px; width: 265px; max-width: calc(100vw - 24px); display: none; z-index: 13; border-color: #38bdf8; }
     #radar-panel .title { color: #7dd3fc; font-size: 12.5px; display: flex; justify-content: space-between; align-items: center; }
     #radar-list { margin-top: 6px; font-size: 11.5px; display: flex; flex-direction: column; gap: 4px; max-height: 170px; overflow-y: auto; }
     .radar-row { display: flex; justify-content: space-between; gap: 6px; padding: 3px 6px; border-radius: 5px; background: #0f192b; border-left: 3px solid #60a5fa; }
@@ -392,7 +414,7 @@
     .scen-card:hover { border-color: #60a5fa; background: #162540; }
     .scen-card small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
   </style>
-  <script type="module" crossorigin src="/assets/index-iX1rjbpb.js"></script>
+  <script type="module" crossorigin src="/assets/index-CYF-2ben.js"></script>
 </head>
 <body>
   <div id="auth" role="dialog" aria-modal="true" aria-labelledby="auth-title">
@@ -422,7 +444,7 @@
   </div>
 
   <div id="top" class="hud">
-    <div class="panel" id="left-panel" style="max-width: 520px;">
+    <div class="panel" id="left-panel" style="max-width: 405px;">
       <div class="title min-header" id="route-title" style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
         <span><button id="btn-menu" class="mobile-only" title="Menu">☰</button><button id="btn-mainmenu" class="mainmenu" title="Main menu">⌂</button><span id="route-title-text">Loading route…</span></span>
         <button class="min-btn" id="min-left" title="Minimize / expand">−</button>
@@ -436,19 +458,19 @@
         <button id="btn-timetable" data-i="🗓" title="Working timetable">Timetable</button>
         <button id="btn-recorder" data-i="📈" title="Speed recorder chart">Recorder</button>
         <button id="btn-caution" data-i="⚠" title="Caution orders (T.409) in force">Caution</button>
+        <span style="flex-basis:100%;height:0;"></span>
         <button id="btn-photo" data-i="📷" title="Photo mode: hide the HUD, free camera, time of day, save a picture">Photo</button>
+        <button id="btn-vr" data-i="🥽" title="Enter 360° VR (Meta Quest / WebXR)">VR 360°</button>
         <button id="btn-pause" data-i="⏸" title="Pause / Resume simulation (Esc)">Pause</button>
-        <button id="btn-radar" class="tog" data-i="📡" title="Toggle live section train radar">Radar</button>
         <button id="btn-guide" data-i="📖" title="Open Playing Guide (pauses game)">Guide</button>
-        <button id="btn-priority" class="primary" data-i="⚡" title="Request priority at stations/junctions when running >30 min late">Ask Priority</button>
       </div>
       <div id="priority-status"></div>
       <div class="tb-group"><span class="tb-h">Safety &amp; cab</span>
-        <button id="btn-kavach" class="on tog" data-i="🛡" title="Kavach automatic train protection">Kavach</button>
         <button id="btn-busy" class="on tog" data-i="🚦" title="Congested stations hold the home signal">Busy stns</button>
         <button id="btn-incidents" class="on tog" data-i="⚡" title="Random breakdowns and incidents, each with its real procedure">Incidents</button>
         <button id="btn-derail" class="tog" data-i="💥" title="Realistic derailment on gross overspeed over points and curves (off = penalty + heavy lurch only)">Derail: off</button>
-        <button id="btn-lights" class="tog" data-i="💡" title="Headlight: Auto (dark / fog / rain), On or Off — key L">Lights: Auto</button>
+        <span style="flex-basis:100%;height:0;"></span>
+        <button id="btn-lights" class="tog auto-on" data-i="💡" title="Headlight: Auto (dark / fog / rain), On or Off — key L">Lights: Auto</button>
         <button id="btn-wipers" class="tog" data-i="🌧" title="Windscreen wipers: Auto (rain), On or Off — key I">Wipers: Auto</button>
       </div>
       <div class="tb-group"><span class="tb-h">Profile</span>
@@ -456,7 +478,6 @@
         <button id="btn-save-game" data-i="💾" title="Save simulator progress till last station (signed-in users)" style="display:none;">Save</button>
         <button id="btn-load-game" data-i="📂" title="Load / resume a saved game (signed-in users)" style="display:none;">Load</button>
         <button id="user-chip" data-i="👤" title="Account">Guest · Log in</button>
-        <span class="badge" id="backend-badge">…</span>
       </div>
     </div>
 
@@ -510,8 +531,6 @@
           <option value="medium">Medium</option>
           <option value="low">Low (phones)</option>
         </select>
-      </div>
-      <div class="row">
         <select id="sel-rate" title="Simulation speed">
           <option value="1">Sim 1×</option>
           <option value="2" selected>Sim 2×</option>
@@ -522,6 +541,8 @@
           <option value="1">Exact 1:1</option>
           <option value="10">Compact 1:10</option>
         </select>
+      </div>
+      <div class="row">
         <button id="btn-sound" class="on tog" data-i="🔊">Sound</button>
         <button id="btn-announce" class="on tog" data-i="📢" title="Station announcements">Announce</button>
         <button id="btn-local" class="on tog" data-i="🗣" title="Repeat announcements in the local language (Telugu, Kannada, Tamil, Hindi…)">Local lang</button>
@@ -560,11 +581,10 @@
           <select id="mp-route"><option value="custom">My own route… (choose in Route &amp; Roster)</option><option value="gtl-sc">Guntakal → Secunderabad</option><option value="gtl-krnt">Guntakal → Kurnool</option><option value="sbc-gtl">Bengaluru → Guntakal</option><option value="mas-bza">Chennai → Vijayawada</option><option value="wadi-csmt">Wadi → Mumbai CSMT</option><option value="hyb-ubl">Hyderabad → Hubballi</option></select>
           <button class="primary" id="mp-create">Create room</button><button id="mp-join">Join</button></span></div>
         <div class="tile" id="tile-daily"><span class="ti">📅</span><b>Daily challenge</b><small id="daily-desc">Same route, train, weather and time for everyone today — one shot at the daily top 10</small></div>
-        <div class="tile small" id="tile-peak"><span class="ti">🚉</span><b>Mumbai peak-hour challenge</b><small>Station Master at CSMT in the evening rush: locals every few seconds</small></div>
+        <div class="tile small" id="tile-guide"><span class="ti">📖</span><b>Playing Guide</b><small>Train Simulation buttons, live station overview &amp; controls</small></div>
         <div class="tile small" id="tile-stats"><span class="ti">🏆</span><b>Statistics &amp; Top 10</b><small>Daily · weekly · monthly leaderboards</small></div>
         <div class="tile small" id="tile-career"><span class="ti">🎖️</span><b>Career</b><small>Rank, XP and run history</small></div>
-        <div class="tile small" id="tile-guide"><span class="ti">📖</span><b>Playing Guide</b><small>Train Simulation buttons, live station overview &amp; controls</small></div>
-        <div class="tile small" id="tile-scenarios"><span class="ti">🎯</span><b>Scenarios &amp; Missions</b><small>Timed challenges: Late Rajdhani, Coal Climb, Godavari Express &amp; Night Mail</small></div>
+        <div class="tile small" id="tile-scenarios"><span class="ti">🎯</span><b>Scenarios &amp; Missions</b><small>Timed challenges: Late Rajdhani, Coal Climb, Godavari Express, Night Mail &amp; Mumbai Peak Rush</small></div>
       </div>
     </div>
   </div>
@@ -582,16 +602,25 @@
       <div class="row" style="justify-content:space-between;margin-top:0;">
         <div class="title" style="font-size:18px;">📖 Train Simulation · Playing Guide</div>
         <div class="row" style="margin-top:0;">
-          <button class="primary" id="guide-drive">🚆 Open Simulator</button>
+          <button class="primary" id="btn-tutorial">🎓 Live Tutorial</button>
+          <button id="guide-drive">🚆 Open Simulator</button>
           <button id="guide-close">Close</button>
         </div>
       </div>
       <div class="muted" style="font-size:12px;margin-top:4px;">Live Guntakal Jn station view &amp; interactive guide for <b>Train Simulation</b> mode. Click any button below to see what it does.</div>
       <div style="margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid #2c3e5a;background:#091224;position:relative;">
-        <img id="guide-photo" src="/guntakal-guide.png" alt="Guntakal Jn Live Station with Trains" style="width:100%;max-height:240px;object-fit:cover;display:block;">
+        <img id="guide-photo" src="guntakal-guide.png" onerror="this.style.display='none';document.getElementById('guide-photo-fb').style.display='flex';" alt="Guntakal Jn Live Station with Trains" style="width:100%;max-height:220px;object-fit:cover;display:block;">
+        <div id="guide-photo-fb" style="display:none;height:130px;align-items:center;justify-content:center;color:#93c5fd;font-size:13px;background:linear-gradient(135deg,#0f172a,#1e293b);">🚆 Guntakal Jn (GTL) — WAP-7 + LHB Express &amp; Passenger Operations</div>
         <div style="position:absolute;bottom:8px;left:10px;background:rgba(15,22,36,.85);border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:11px;color:#fde047;">
           <b>GUNTAKAL JN (GTL)</b> · Live Station Reference (WAP-7 + LHB Express &amp; Passenger Trains)
         </div>
+      </div>
+      <div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:#0d1b2a;border:1px solid #2563eb;font-size:12px;line-height:1.5;">
+        <b style="color:#93c5fd;display:block;margin-bottom:4px;">🚀 Quick Start — How to Drive in 4 Steps</b>
+        <div><b>1. Ready the Loco:</b> Press <b>R</b> (Release Brakes) and ensure <b>P</b> (Panto: Up) is raised on electric locos. Wait for the <b>Green/Yellow</b> starter signal &amp; Station Master green flag.</div>
+        <div><b>2. Accelerate &amp; Cruise:</b> Press <b>W</b> (Throttle +) to build speed; press <b>K</b> (Cruise) to hold your current speed automatically. Press <b>S</b> (Throttle −) to reduce power or engage Reverse at 0 km/h.</div>
+        <div><b>3. Watch Signals &amp; Crossings:</b> Keep an eye on the <b>Next Signal</b> panel (top-right) and press <b>H</b> (Horn) before level crossings (<b>W/L</b> boards).</div>
+        <div><b>4. Stop Smoothly:</b> Press <b>Space</b> (Brake) well before a <b>RED</b> signal or station stop board, then press <b>R</b> once halted.</div>
       </div>
       <div class="guide-tabs" id="guide-tabs">
         <button class="on" data-gcat="all">All Buttons</button>
@@ -746,6 +775,13 @@
   </div>
 
   <div id="toast"></div>
+  <div id="tut-bar" class="panel" style="position:fixed;bottom:146px;left:50%;transform:translateX(-50%);z-index:24;display:none;max-width:min(540px,92vw);border-color:#38bdf8;background:rgba(10,18,34,.95);padding:10px 14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+      <b id="tut-title" style="color:#7dd3fc;font-size:13px;">🎓 Live Tutorial</b>
+      <button id="tut-close" class="min-btn" title="Exit tutorial">✕ Exit</button>
+    </div>
+    <div id="tut-body" style="font-size:12.5px;margin-top:4px;line-height:1.4;"></div>
+  </div>
   <div id="inc-panel" class="panel" role="status" aria-live="polite"></div>
   <div id="co-panel" class="panel" role="dialog" aria-label="Caution order"></div>
   <div id="shunt-panel" class="panel" role="status" aria-live="polite"></div>
@@ -859,18 +895,21 @@
       </div>
     </div>
     <div class="panel" id="controls">
-      <div class="row">
-        <button id="btn-up"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span>Throttle + (W)</span></button>
-        <button id="btn-dn"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span><span>Throttle − (S)</span></button>
+      <div class="ctl-grid">
+        <button id="btn-up"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span>Thr + (W)</span></button>
+        <button id="btn-dn"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span><span>Thr − (S)</span></button>
         <button id="btn-cruise" class="tog" title="Hold current constant speed (K)">Cruise (K)</button>
+        <button id="btn-kavach-ctl" class="on tog" title="Kavach Automatic Train Protection">🛡 Kavach</button>
+        <button id="btn-radar-ctl" class="tog" title="Toggle Live Train Radar">📡 Radar</button>
       </div>
-      <div class="row" style="margin-top:6px;">
-        <button id="btn-brk"><span class="ctl-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></svg></span><span>Brake (Space)</span></button>
-        <button id="btn-rel"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></span><span>Release (R)</span></button>
+      <div class="ctl-grid">
+        <button id="btn-brk"><span class="ctl-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></svg></span><span>Brk (Spc)</span></button>
+        <button id="btn-rel"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></span><span>Rel (R)</span></button>
         <button id="btn-emg" style="background:#7f1d1d;border-color:#ef4444;"><span class="ctl-ico"><svg viewBox="0 0 24 24"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></span><span>EMG (E)</span></button>
-        <button id="horn-btn"><span class="ctl-ico"><svg viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg></span><span>HORN (H)</span></button>
+        <button id="horn-btn"><span class="ctl-ico"><svg viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg></span><span>Horn (H)</span></button>
         <button id="btn-panto" class="on" title="Raise / lower the pantograph (P)"><span class="ctl-ico" id="panto-ico"><svg viewBox="0 0 24 24"><path d="M4 20h16M7 20l5-7 5 7M12 13l-4-5 4-4 4 4-4 5M6 4h12"/></svg></span><span id="panto-txt">Panto: up</span></button>
       </div>
+      <button id="btn-priority-ctl" style="margin-top:2px;" title="Request section priority when running >30 min late">⚡ Ask Priority</button>
     </div>
   </div>
 

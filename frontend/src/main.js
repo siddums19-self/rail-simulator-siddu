@@ -96,6 +96,10 @@ if (isPhone()) setTextureScale(0.5); // phones: quarter-size procedural textures
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 7000);
+const xrRig = new THREE.Group();
+xrRig.add(camera);
+scene.add(xrRig);
+renderer.xr.enabled = true;
 const sky = new SkySystem(renderer, scene);
 if (Q.shadow > 0) sky.setShadowSize(Q.shadow); else sky.sun.castShadow = false;
 
@@ -190,14 +194,38 @@ let busy = false;
 function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } }
 
-let toastTimer = null;
+function placeToastContainer() {
+  const host = $('toast');
+  if (!host) return;
+  const bar = document.querySelector('#top > .panel');
+  const topPx = bar && bar.offsetParent !== null ? Math.round(bar.getBoundingClientRect().bottom + 10) : 12;
+  host.style.top = `${Math.max(12, topPx)}px`;
+}
+
 function toast(msg, kind = '', ms = 3200) {
-  const el = $('toast');
-  el.textContent = msg;
-  el.className = kind;
-  el.style.display = 'block';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.style.display = 'none'; }, ms);
+  const host = $('toast');
+  if (!host) return;
+  placeToastContainer();
+  const item = document.createElement('div');
+  item.className = `toast-item${kind ? ' ' + kind : ''}`;
+  const txt = document.createElement('span');
+  txt.textContent = msg;
+  const close = document.createElement('button');
+  close.className = 'toast-x';
+  close.type = 'button';
+  close.title = 'Dismiss';
+  close.textContent = '×';
+  let timer = null;
+  const dismiss = () => {
+    clearTimeout(timer);
+    item.classList.add('out');
+    setTimeout(() => item.remove(), 220);
+  };
+  close.onclick = dismiss;
+  item.append(txt, close);
+  host.appendChild(item);
+  while (host.children.length > 3) host.firstElementChild.remove();
+  timer = setTimeout(dismiss, ms);
 }
 
 // ======================================================================
@@ -432,7 +460,7 @@ function updateRouteHeader() {
   let meta = `${r.totalRealKm} km · ${layout.stations.length} stations · ${rakeLabel()}`;
   if (layout.gtl) meta += layout.gtl.gooty ? ` · Guntakal east junction (Dhone line branches left)` : ` · Dhone diversion · VV Nagar ${world.gtl.vvSide}`;
   $('route-meta').textContent = meta;
-  $('backend-badge').textContent = `${isWebGPU ? 'WebGPU' : 'WebGL2'} · ${state.backendOnline ? 'Online' : 'Offline mode'}`;
+  if ($('backend-badge')) $('backend-badge').textContent = `${isWebGPU ? 'WebGPU' : 'WebGL2'} · ${state.backendOnline ? 'Online' : 'Offline mode'}`;
 }
 
 function renderSolvedList() {
@@ -576,20 +604,37 @@ $('btn-emg').onclick = () => { state.emergency = true; state.notch = 0; state.br
 const hornBtn = $('horn-btn');
 hornBtn.addEventListener('pointerdown', async () => { await unlockAudio(); audio.hornStart(); });
 for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) hornBtn.addEventListener(ev, () => audio.hornStop());
-$('btn-auto').onclick = () => { state.auto = !state.auto; if (state.auto) { state.emergency = false; } syncAuto(); toast(state.auto ? 'Auto driver ON — obeys signals, limits and halts' : 'Auto driver OFF', 'ok', 1800); };
+$('btn-auto').onclick = () => {
+  if (isLockedMode()) { state.auto = false; syncAuto(); toast('Auto drive is disabled in Daily Challenge / Multiplayer', 'warn', 2600); return; }
+  state.auto = !state.auto; if (state.auto) { state.emergency = false; } syncAuto(); toast(state.auto ? 'Auto driver ON — obeys signals, limits and halts' : 'Auto driver OFF', 'ok', 1800);
+};
 const cycle = (v) => (v === 'auto' ? 'on' : v === 'on' ? 'off' : 'auto');
 const label = (v) => v.charAt(0).toUpperCase() + v.slice(1);
-function toggleLights() { state.lights = cycle(state.lights); $('btn-lights').textContent = `Lights: ${label(state.lights)}`; $('btn-lights').classList.toggle('on', state.lights === 'on'); }
+function toggleLights() {
+  state.lights = cycle(state.lights);
+  $('btn-lights').textContent = `Lights: ${label(state.lights)}`;
+  $('btn-lights').classList.toggle('on', state.lights === 'on');
+  $('btn-lights').classList.toggle('auto-on', state.lights === 'auto');
+}
 function toggleWipers() { state.wipers = cycle(state.wipers); $('btn-wipers').textContent = `Wipers: ${label(state.wipers)}`; $('btn-wipers').classList.toggle('on', state.wipers === 'on'); }
 $('btn-lights').onclick = toggleLights;
 $('btn-wipers').onclick = toggleWipers;
-$('btn-derail').onclick = (e) => { state.derailments = !state.derailments; e.target.classList.toggle('on', state.derailments); e.target.textContent = `Derail: ${state.derailments ? 'on' : 'off'}`; toast(state.derailments ? 'Realistic derailment ON — gross overspeed over points/curves derails the train' : 'Derailment OFF — overspeed over points costs score and gives a heavy lurch', 'ok', 2600); };
-$('btn-busy').onclick = (e) => { state.busyStations = !state.busyStations; if (ops) ops.busyEnabled = state.busyStations; e.target.classList.toggle('on', state.busyStations); toast(state.busyStations ? 'Busy stations ON — some home signals will be held' : 'Busy stations OFF', 'ok', 2000); };
-$('btn-stops').onclick = () => { const m = $('stops-panel'); renderStopsPanel(); m.style.display = m.style.display === 'block' ? 'none' : 'block'; };
+function syncSafetyButtons() {
+  $('btn-derail')?.classList.toggle('on', state.derailments);
+  if ($('btn-derail')) $('btn-derail').textContent = `Derail: ${state.derailments ? 'on' : 'off'}`;
+  $('btn-busy')?.classList.toggle('on', state.busyStations);
+  if (ops) ops.busyEnabled = state.busyStations;
+  $('btn-incidents')?.classList.toggle('on', state.incidentsOn);
+  if (incidents) incidents.enabled = state.incidentsOn;
+  $('btn-kavach-ctl')?.classList.toggle('on', state.kavach);
+}
+$('btn-derail').onclick = () => { if (isLockedMode()) return; state.derailments = !state.derailments; syncSafetyButtons(); toast(state.derailments ? 'Realistic derailment ON — gross overspeed over points/curves derails the train' : 'Derailment OFF — overspeed over points costs score and gives a heavy lurch', 'ok', 2600); };
+$('btn-busy').onclick = () => { if (isLockedMode()) return; state.busyStations = !state.busyStations; syncSafetyButtons(); toast(state.busyStations ? 'Busy stations ON — some home signals will be held' : 'Busy stations OFF', 'ok', 2000); };
+$('btn-stops').onclick = () => { if (isLockedMode()) { toast('Stops & timetable are locked in Daily Challenge / Multiplayer', 'warn', 2400); return; } const m = $('stops-panel'); renderStopsPanel(); m.style.display = m.style.display === 'block' ? 'none' : 'block'; };
 $('btn-panto').onclick = () => { if (state.traction === 'electric') setPanto(!state.panto); };
-$('btn-incidents').onclick = (e) => { state.incidentsOn = !state.incidentsOn; if (incidents) incidents.enabled = state.incidentsOn; e.target.classList.toggle('on', state.incidentsOn); toast(state.incidentsOn ? 'Breakdowns & incidents ON — follow the procedure when one happens' : 'Breakdowns & incidents OFF (the current one still runs to the end)', 'ok', 2600); };
+$('btn-incidents').onclick = () => { if (isLockedMode()) return; state.incidentsOn = !state.incidentsOn; syncSafetyButtons(); toast(state.incidentsOn ? 'Breakdowns & incidents ON — follow the procedure when one happens' : 'Breakdowns & incidents OFF (the current one still runs to the end)', 'ok', 2600); };
 $('inc-panel').onclick = (e) => { const b = e.target.closest('[data-act]'); if (b && !b.disabled && incidents) { incidents.act(b.dataset.act); } };
-$('btn-kavach').onclick = (e) => { state.kavach = !state.kavach; e.target.classList.toggle('on', state.kavach); toast(state.kavach ? 'Kavach ATP ON — automatic braking for red signals & overspeed' : 'Kavach ATP OFF — you are responsible for signals; SPADs can cause collisions', state.kavach ? 'ok' : 'warn', 3500); };
+if ($('btn-kavach-ctl')) $('btn-kavach-ctl').onclick = () => { if (isLockedMode()) return; state.kavach = !state.kavach; syncSafetyButtons(); toast(state.kavach ? 'Kavach ATP ON — automatic braking for red signals & overspeed' : 'Kavach ATP OFF — you are responsible for signals; SPADs can cause collisions', state.kavach ? 'ok' : 'warn', 3500); };
 
 // Pause / Resume
 function togglePause(force = null) {
@@ -603,7 +648,7 @@ $('btn-pause').onclick = () => togglePause();
 $('btn-unpause').onclick = () => togglePause(false);
 
 // Priority request when running > 30 min late
-$('btn-priority').onclick = () => {
+if ($('btn-priority-ctl')) $('btn-priority-ctl').onclick = () => {
   if (!ops || !layout) return;
   const nst = ops.nextStation(state.sFront) || ops.currentStation(state.sFront);
   if (!nst) return;
@@ -612,7 +657,8 @@ $('btn-priority').onclick = () => {
     return;
   }
   state.priorityReqStation = nst.index;
-  const approved = Math.random() < 0.55;
+  const approved = Math.random() < 0.35;
+  state.priorityOutcome = approved ? 'approved' : 'denied';
   const stEl = $('priority-status');
   if (approved) {
     let grantedCount = 0;
@@ -653,16 +699,35 @@ bindMinimize('min-pf', 'pf-panel');
 
 // Live Train Radar toggle
 state.radarOn = false;
-if ($('btn-radar')) $('btn-radar').onclick = (e) => {
+const placeRadar = () => {
+  const rp = $('radar-panel'), cp = $('campad');
+  if (!rp) return;
+  if (cp && getComputedStyle(cp).display !== 'none') {
+    const r = cp.getBoundingClientRect();
+    if (r.height > 0) {
+      rp.style.bottom = `${Math.max(140, Math.round(innerHeight - r.top + 8))}px`;
+      return;
+    }
+  }
+  rp.style.bottom = '136px';
+};
+const toggleRadar = () => {
   state.radarOn = !state.radarOn;
-  e.target.classList.toggle('on', state.radarOn);
+  $('btn-radar')?.classList.toggle('on', state.radarOn);
+  $('btn-radar-ctl')?.classList.toggle('on', state.radarOn);
+  if (state.radarOn) placeRadar();
   $('radar-panel').style.display = state.radarOn ? 'block' : 'none';
 };
+if ($('btn-radar')) $('btn-radar').onclick = toggleRadar;
+if ($('btn-radar-ctl')) $('btn-radar-ctl').onclick = toggleRadar;
 if ($('radar-close')) $('radar-close').onclick = () => {
   state.radarOn = false;
   $('btn-radar')?.classList.remove('on');
+  $('btn-radar-ctl')?.classList.remove('on');
   $('radar-panel').style.display = 'none';
 };
+if ($('min-cam')) $('min-cam').addEventListener('click', () => { if (state.radarOn) requestAnimationFrame(placeRadar); });
+addEventListener('resize', () => { if (state.radarOn) placeRadar(); });
 
 // Strip map scroll arrows
 if ($('strip-left')) $('strip-left').onclick = () => { $('strip-viewport')?.scrollBy({ left: -180, behavior: 'smooth' }); };
@@ -706,7 +771,18 @@ $('btn-reverse').onclick = () => {
   if (j.sub) { startSuburban(j.sub.city, j.sub.route, !j.sub.reverse); return; }
   startRoute({ src: j.dst, dst: j.src, via: j.via.slice().reverse(), rakeType: j.rakeType, allStops: j.allStops });
 };
+const isLockedMode = () => !!(state.daily || mp.racing);
+function syncLockedControls() {
+  const locked = isLockedMode();
+  if (locked && state.auto) { state.auto = false; syncAuto(); }
+  for (const id of ['sel-weather', 'sel-fest', 'sel-time', 'sel-scale', 'photo-time', 'btn-auto', 'btn-kavach-ctl', 'btn-busy', 'btn-incidents', 'btn-derail', 'btn-stops', 'btn-priority', 'btn-priority-ctl']) {
+    const el = $(id);
+    if (el) el.disabled = locked;
+  }
+}
+
 $('sel-weather').onchange = (e) => {
+  if (isLockedMode()) { e.target.value = state.weather; toast('Weather is locked in Daily Challenge / Multiplayer', 'warn', 2600); return; }
   if (e.target.value === 'LIVE') { state.liveWeather = true; liveWeather(); return; }
   state.liveWeather = false;
   if (e.target.value === 'DYNAMIC') { state.weatherMode = 'DYNAMIC'; dynWeather.next = state.gameMinutes + 8; toast('Dynamic weather: it will change as the journey goes on', 'ok', 3000); return; }
@@ -726,10 +802,12 @@ function showCautionOrder(always = false) {
   $('co-ack').onclick = () => { $('co-panel').style.display = 'none'; };
 }
 $('sel-fest').onchange = (e) => {
+  if (isLockedMode()) { e.target.value = state.festSel; toast('Day/festival is locked in Daily Challenge / Multiplayer', 'warn', 2600); return; }
   state.festSel = e.target.value; if (world) world.festival = festivalNow();
   const f = festivalNow(); toast(f ? `${FESTIVAL_LABEL[f]} — decorations appear at the stations ahead` : 'No festival decorations', 'ok', 3000);
 };
 $('sel-time').onchange = (e) => {
+  if (isLockedMode()) { e.target.value = ''; toast('Time of day is locked in Daily Challenge / Multiplayer', 'warn', 2600); return; }
   if (e.target.value) {
     state.liveTime = e.target.value === 'LIVE';
     const to = state.liveTime ? nowMinutes() : Number(e.target.value);
@@ -743,12 +821,24 @@ $('sel-time').onchange = (e) => {
 $('sel-rate').onchange = (e) => { state.simRate = Number(e.target.value); };
 $('sel-scale').value = String(state.scale);
 $('sel-scale').onchange = (e) => {
+  if (isLockedMode()) { e.target.value = String(state.scale); toast('Distance scale is locked in Daily Challenge / Multiplayer', 'warn', 2600); return; }
   state.scale = Number(e.target.value); localStorageSet('railsim.scale', String(state.scale));
   toast(state.scale === 1 ? 'Exact distances — restarting the route' : 'Compact 1:10 distances — restarting the route', 'ok', 2500);
   startRoute({ src: state.src, dst: state.dst, via: state.via, rakeType: state.rakeType, allStops: state.allStops, stops: state.stops, trainNo: state.journey?.trainNo, trainName: state.journey?.trainName });
 };
 $('sel-quality').value = qualityKey;
-$('sel-quality').onchange = (e) => { localStorageSet('railsim.quality', e.target.value); location.search = `?q=${e.target.value}`; };
+$('sel-quality').onchange = (e) => {
+  qualityKey = e.target.value;
+  localStorageSet('railsim.quality', qualityKey);
+  Q = QUALITY[qualityKey] || QUALITY.high;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxDpr()));
+  renderer.shadowMap.enabled = Q.shadow > 0;
+  if (Q.shadow > 0) { sky.sun.castShadow = true; sky.setShadowSize(Q.shadow); }
+  else { sky.sun.castShadow = false; }
+  setupPost();
+  if (world) world.density = Q.density;
+  toast(`Graphics: ${qualityKey.toUpperCase()} (applied live)`, 'ok', 2200);
+};
 $('btn-sound').onclick = async (e) => { await unlockAudio(); audio.enabled = !audio.enabled; e.target.classList.toggle('on', audio.enabled); };
 const setVoice = (mode) => {
   stationAudio.voiceMode = mode; stationAudio.cloudDownUntil = 0;
@@ -980,6 +1070,11 @@ const SIM_GUIDE_ITEMS = [
   { cat: 'controls', icon: '⚠', name: 'EMG Brake', key: 'E', desc: 'Cuts power immediately and applies 100% emergency braking.' },
   { cat: 'controls', icon: '📢', name: 'HORN', key: 'H', desc: 'Sounds the locomotive horn (required at W/L whistle boards before level crossings).' },
   { cat: 'controls', icon: '🔌', name: 'Panto', key: 'P', desc: 'Raises or lowers the electric locomotive pantograph (must be lowered through OHE dead sections).' },
+  { cat: 'controls', icon: '🎯', name: 'Cruise', key: 'K', desc: 'Locks and holds your current forward speed automatically by modulating throttle.' },
+  { cat: 'controls', icon: '🛡', name: 'Kavach', key: '—', desc: 'Automatic Train Protection (ATP): automatically applies brakes to prevent overspeeding and red-signal SPADs. Toggle in Controls (locked in Daily/MP).' },
+  { cat: 'controls', icon: '⚡', name: 'Ask Priority', key: '—', desc: 'Flashes blue in Controls when >30 min late (non-premier trains). Click to request section precedence (35% approval; solid blue while active, resets after passing the station).' },
+  { cat: 'controls', icon: '📡', name: 'Live Radar', key: '—', desc: 'Shows nearby AI trains within 6 km: AHEAD (same direction), ONCOMING (opposite direction), OVERTAKING, and CROSSING.' },
+  { cat: 'hud', icon: '🥽', name: 'VR 360°', key: '—', desc: 'Enters WebXR 360° VR mode (Meta Quest Browser / HTTPS). Thumbstick: Throttle, Trigger/Grip: Brake, A/X: Horn, B/Y: Camera.' },
   { cat: 'hud', icon: '🎥', name: 'Camera Views & Pad', key: '1–9, C', desc: 'Switch between front cab, exterior, guard van (8), and crew (9) views, or pan/orbit/zoom using the Camera Pad (can be minimized with −).' },
   { cat: 'hud', icon: '➖', name: 'Minimize Panels', key: '—', desc: 'Use − / + on the Left Journey panel, Right Weather/Sim panel, Camera Pad, and Speedometer (collapses to speed only).' },
   { cat: 'hud', icon: '◀▶', name: 'Station Strip Slider', key: '—', desc: 'Scroll left/right across long routes with many stations so station names never overlap.' },
@@ -995,12 +1090,53 @@ function renderGuide() {
 }
 $('tile-guide').onclick = () => { renderGuide(); $('guide-modal').style.display = 'flex'; };
 
+// ---- Live interactive driving tutorial
+const TUT_STEPS = [
+  { title: 'Step 1 / 5 · Ready the Locomotive', body: 'Press <b>R</b> (or click <b>Rel</b>) to release brakes to 0%, and ensure <b>Panto: up</b> (<b>P</b>) if electric.', done: () => state.brake === 0 && (state.traction !== 'electric' || state.panto) },
+  { title: 'Step 2 / 5 · Accelerate', body: 'Press <b>W</b> (or click <b>Thr +</b>) to apply power and accelerate past <b>10 km/h</b>.', done: () => state.notch > 0 && state.speed * 3.6 >= 10 },
+  { title: 'Step 3 / 5 · Cruise Control', body: 'Press <b>K</b> (or click <b>Cruise</b>) to hold your current speed automatically.', done: () => state.cruise != null || state.speed * 3.6 >= 45 },
+  { title: 'Step 4 / 5 · Sound the Horn', body: 'Press <b>H</b> (or click <b>Horn</b>) to acknowledge level crossings and warn trackside.', done: () => !!audio.hornHeld },
+  { title: 'Step 5 / 5 · Apply & Release Brakes', body: 'Press <b>Space</b> (or click <b>Brk</b>) to slow down, then <b>R</b> to release.', done: () => state.brake > 0 }
+];
+let tutStep = -1;
+function renderTutorial() {
+  const bar = $('tut-bar');
+  if (!bar) return;
+  if (tutStep < 0) { bar.style.display = 'none'; return; }
+  bar.style.display = 'block';
+  if (tutStep >= TUT_STEPS.length) {
+    $('tut-title').textContent = '🎉 Tutorial Complete!';
+    $('tut-body').innerHTML = 'You are ready to drive! Watch the <b>Next Signal</b> panel (top-right) and stop before RED signals or station stop boards.';
+    return;
+  }
+  const s = TUT_STEPS[tutStep];
+  $('tut-title').textContent = `🎓 ${s.title}`;
+  $('tut-body').innerHTML = s.body;
+}
+function updateTutorial() {
+  if (tutStep < 0 || tutStep >= TUT_STEPS.length || !layout) return;
+  if (TUT_STEPS[tutStep].done()) {
+    tutStep++;
+    renderTutorial();
+    if (tutStep >= TUT_STEPS.length) setTimeout(() => { if (tutStep >= TUT_STEPS.length) { tutStep = -1; renderTutorial(); } }, 5000);
+  }
+}
+if ($('btn-tutorial')) $('btn-tutorial').onclick = () => {
+  $('guide-modal').style.display = 'none';
+  hideHome();
+  if (state.paused) togglePause(false);
+  tutStep = 0;
+  renderTutorial();
+};
+if ($('tut-close')) $('tut-close').onclick = () => { tutStep = -1; renderTutorial(); };
+
 // ---- Scenarios & Missions
 const SCENARIOS = [
   { title: '⏱ Late Rajdhani Recovery', desc: 'Secunderabad → Nagpur (Rajdhani) · Start 35 min late. Use Ask Priority & high-speed LHB running to recover time.', opts: { src: 'SC', dst: 'NGP', rakeType: 'RAJDHANI', weather: 'CLEAR', minutes: 10 * 60, startDelayMin: 35 } },
   { title: '🪨 Heavy BOXN Coal Climb', desc: 'Guntakal → Dhone (58-wagon BOXN Goods, WAG-12B) · Summer haze on single line with crossing loops.', opts: { src: 'GTL', dst: 'DHNE', rakeType: 'BOXN_GOODS', loco: 'WAG12', weather: 'HAZE', minutes: 15 * 60 } },
   { title: '🌉 Godavari & Krishna Twin-Bridge Express', desc: 'Vijayawada → Visakhapatnam (WAP-7 LHB) · Golden-hour run across the twin Godavari bridges after Rajahmundry.', opts: { src: 'BZA', dst: 'VSKP', rakeType: 'LHB', weather: 'CLEAR', minutes: 17 * 60 + 15 } },
-  { title: '🌧 Monsoon Western Ghats Night Mail', desc: 'Wadi → Kalyan (ICF Express) · 23:30 Monsoon night mail through heavy rain, lightning & ghats.', opts: { src: 'WADI', dst: 'KYN', rakeType: 'ICF', weather: 'MONSOON', nightMail: true, minutes: 23 * 60 + 30 } }
+  { title: '🌧 Monsoon Western Ghats Night Mail', desc: 'Wadi → Kalyan (ICF Express) · 23:30 Monsoon night mail through heavy rain, lightning & ghats.', opts: { src: 'WADI', dst: 'KYN', rakeType: 'ICF', weather: 'MONSOON', nightMail: true, minutes: 23 * 60 + 30 } },
+  { title: '🚉 Mumbai Peak-Hour Challenge (CSMT)', desc: 'Station Master at Mumbai CSMT in the 18:00 evening rush — locals arriving & departing every few seconds.', fn: () => { $('sm-flow').value = '2'; $('sm-time').value = '1080'; smStart('CSMT', 'rush15'); } }
 ];
 if ($('tile-scenarios')) $('tile-scenarios').onclick = () => {
   $('scen-list').innerHTML = SCENARIOS.map((s, i) => `<div class="scen-card" data-scen="${i}"><div><b>${s.title}</b><small>${s.desc}</small></div><button class="primary">Play</button></div>`).join('');
@@ -1014,6 +1150,7 @@ if ($('scen-list')) $('scen-list').onclick = (e) => {
   if (!sc) return;
   $('scenarios-modal').style.display = 'none';
   hideHome();
+  if (sc.fn) { sc.fn(); return; }
   $('route-modal').style.display = 'none';
   startRoute(sc.opts);
   toast(`Mission started: ${sc.title}`, 'ok', 4000);
@@ -1031,7 +1168,7 @@ $('guide-grid').onclick = (e) => {
   $('guide-detail').innerHTML = `<b>${x.icon} ${x.name}</b> &nbsp;<span class="badge">Shortcut: ${x.key}</span><div style="margin-top:4px;color:#cbd5e1;">${x.desc}</div>`;
 };
 $('btn-mainmenu').onclick = () => $('btn-home').onclick();
-$('btn-home').onclick = () => { if (state.speed > 0.5 && !confirm('Go back to the start screen? Your train will be left where it is.')) return; showHome(); };
+$('btn-home').onclick = () => { if (state.speed > 0.5 && !confirm('Go back to the start screen? Your train will be left where it is.')) return; state.daily = null; syncLockedControls(); showHome(); };
 
 let statsPeriod = 'daily', statsMode = 'drive';
 async function openStats() { $('stats-modal').style.display = 'flex'; await renderStats(); }
@@ -1089,7 +1226,39 @@ $('photo-exit').onclick = () => {
     photoBurntMin = 0;
   }
 };
-$('photo-time').oninput = (e) => { state.gameMinutes = Number(e.target.value); };
+$('photo-time').oninput = (e) => {
+  if (isLockedMode()) { e.target.value = Math.round(state.gameMinutes % 1440); toast('Time is locked in Daily Challenge / Multiplayer', 'warn', 2400); return; }
+  state.gameMinutes = Number(e.target.value);
+};
+if ($('btn-vr')) $('btn-vr').onclick = async () => {
+  if (renderer.xr.isPresenting) {
+    await renderer.xr.getSession()?.end();
+    return;
+  }
+  if (!navigator.xr) { toast('WebXR not available in this browser — use Meta Quest Browser or Chrome with HTTPS', 'warn', 4000); return; }
+  const ok = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
+  if (!ok) { toast('Immersive VR headset not detected', 'warn', 3500); return; }
+  if (isWebGPU && !params.has('webgl')) {
+    const u = new URL(location.href);
+    u.searchParams.set('webgl', '1');
+    location.href = u.toString();
+    return;
+  }
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] });
+    session.addEventListener('end', () => {
+      rig.xrActive = false;
+      $('btn-vr')?.classList.remove('on');
+    });
+    await renderer.xr.setSession(session);
+    rig.setXrRig(xrRig);
+    rig.xrActive = true;
+    $('btn-vr')?.classList.add('on');
+    toast('360° VR active — Thumbstick: Throttle, Trigger/Grip: Brake, A/X: Horn, B/Y: Camera', 'ok', 4500);
+  } catch (err) {
+    toast(`VR start failed: ${err.message}`, 'warn', 4000);
+  }
+};
 $('photo-save').onclick = () => {
   if (pipeline) pipeline.render(); else renderer.render(scene, camera);
   try {
@@ -1125,11 +1294,35 @@ function renderMp(room) {
   if (room.started && !mp.racing) {
     mp.racing = true; hideHome();
     const r = room.route || {};
+    if (r.weather) {
+      state.weatherMode = r.weather === 'DYNAMIC' ? 'DYNAMIC' : null;
+      state.weather = r.weather === 'DYNAMIC' ? 'CLEAR' : r.weather;
+      if ($('sel-weather')) $('sel-weather').value = r.weather;
+    }
+    if (r.fest) { state.festSel = r.fest; if ($('sel-fest')) $('sel-fest').value = r.fest; }
+    if (r.scale) { state.scale = Number(r.scale); if ($('sel-scale')) $('sel-scale').value = String(state.scale); }
+    if (typeof r.kavach === 'boolean') state.kavach = r.kavach;
+    if (typeof r.busy === 'boolean') state.busyStations = r.busy;
+    if (typeof r.incidents === 'boolean') state.incidentsOn = r.incidents;
+    if (typeof r.derail === 'boolean') state.derailments = r.derail;
+    syncSafetyButtons();
+    const startMin = typeof r.minutes === 'number' ? r.minutes : 9 * 60;
+    syncLockedControls();
     if (r.sub) startSuburban(r.sub.city, r.sub.route, !!r.sub.reverse);
-    else if (r.preset) startRoute({ ...PRESETS[r.preset], trainNo: null, trainName: null, minutes: 9 * 60 });
-    else startRoute({ src: r.src, dst: r.dst, via: r.via || [], rakeType: r.rakeType || 'LHB', allStops: !!r.allStops, stops: r.stops || null, minutes: 9 * 60 });
+    else if (r.preset) startRoute({ ...PRESETS[r.preset], trainNo: null, trainName: null, minutes: startMin, weather: state.weather });
+    else startRoute({ src: r.src, dst: r.dst, via: r.via || [], rakeType: r.rakeType || 'LHB', allStops: !!r.allStops, stops: r.stops || null, minutes: startMin, weather: state.weather });
   }
 }
+const mpSettings = () => ({
+  weather: state.weatherMode || state.weather,
+  minutes: state.liveTime ? nowMinutes() : Math.round(state.gameMinutes),
+  fest: state.festSel,
+  scale: state.scale,
+  kavach: state.kavach,
+  busy: state.busyStations,
+  incidents: state.incidentsOn,
+  derail: state.derailments
+});
 const mpName = () => account.displayName;
 $('mp-create').onclick = async (e) => {
   e.stopPropagation();
@@ -1141,7 +1334,7 @@ $('mp-create').onclick = async (e) => {
     $('mp-pick').style.display = ''; $('mp-pick').textContent = `🏁 Room ${code}: choose the route and train below (your own From/To + train, a saved train or a suburban route). Everyone in the room will drive it.`;
     return;
   }
-  try { await mp.create(code, mpName(), { preset: $('mp-route').value }); hideHome(); toast(`Room ${code} created — share the code`, 'ok', 3500); }
+  try { await mp.create(code, mpName(), { preset: $('mp-route').value, ...mpSettings() }); hideHome(); toast(`Room ${code} created — share the code`, 'ok', 3500); }
   catch (err) { toast(err.message, 'warn', 4000); }
 };
 // when a room is waiting for its route, the planner's start buttons create the room instead of starting
@@ -1149,7 +1342,7 @@ async function mpTakeRoute(route) {
   if (!mp.pendingCode) return false;
   const code = mp.pendingCode; mp.pendingCode = null;
   $('mp-pick').style.display = 'none'; $('route-modal').style.display = 'none';
-  try { await mp.create(code, mpName(), route); toast(`Room ${code} created with your route — share the code, then Start race`, 'ok', 4000); }
+  try { await mp.create(code, mpName(), { ...route, ...mpSettings() }); toast(`Room ${code} created with your route — share the code, then Start race`, 'ok', 4000); }
   catch (err) { toast(err.message, 'warn', 4000); }
   return true;
 }
@@ -1160,7 +1353,7 @@ $('mp-join').onclick = async (e) => {
 };
 $('tile-mp').onclick = (e) => { if (!e.target.closest('input,select,button')) $('mp-code').focus(); };
 $('mp-start').onclick = () => mp.start().then(() => renderMp({ ...mp.room, players: [...mp.players.values()] }));
-$('mp-leave').onclick = () => { mp.racing = false; mp.leave(); };
+$('mp-leave').onclick = () => { mp.racing = false; mp.leave(); syncLockedControls(); };
 setInterval(() => { // our progress for the room
   if (!mp.room || !layout || !mp.racing) return;
   const total = layout.realKmAt(layout.total), km = Math.max(0, layout.realKmAt(state.sFront) - layout.realKmAt(layout.stations[0].layout.pEnd));
@@ -1184,7 +1377,8 @@ function dailyToday() {
   const pick = DAILY_POOL[h % DAILY_POOL.length];
   const weather = ['CLEAR', 'HAZE', 'MONSOON', 'FOG', 'CLEAR'][(h >> 4) % 5];
   const minutes = weather === 'FOG' ? 6 * 60 : [7 * 60, 11 * 60, 16 * 60 + 30, 19 * 60][(h >> 8) % 4];
-  return { key, ...pick, weather, minutes };
+  const fest = ['NONE', 'DIWALI', 'GANESH', 'SANKRANTI', 'NONE'][(h >> 12) % 5];
+  return { key, ...pick, weather, minutes, fest };
 }
 {
   const t = dailyToday(), P0 = () => PRESETS[t.preset];
@@ -1195,12 +1389,15 @@ $('tile-daily').onclick = () => {
   const t = dailyToday(), p = t.route || PRESETS[t.preset];
   hideHome();
   state.daily = t;
+  state.scale = 1; if ($('sel-scale')) $('sel-scale').value = '1';
   state.weather = t.weather; state.weatherMode = null; $('sel-weather').value = t.weather;
+  state.festSel = t.fest; if ($('sel-fest')) $('sel-fest').value = t.fest;
+  state.kavach = true; state.busyStations = true; state.incidentsOn = true; state.derailments = false;
+  syncSafetyButtons();
+  syncLockedControls();
   startRoute({ src: p.src, dst: p.dst, via: p.via || [], rakeType: t.rake, stops: p.stops || null, minutes: t.minutes, trainNo: null, trainName: null });
-  toast(`📅 Daily challenge ${t.key}: finish on time with no SPADs for the best score`, 'ok', 4500);
+  toast(`📅 Daily challenge ${t.key}: settings & safety rules locked — only sim speed (1x–10x) can change`, 'ok', 4500);
 };
-// ---- Mumbai evening rush at CSMT (Station Master, peak flow)
-$('tile-peak').onclick = () => { $('sm-flow').value = '2'; $('sm-time').value = '1080'; smStart('CSMT', 'rush15'); };
 
 const PRESETS = {
   'gtl-sc': { src: 'GTL', dst: 'SC', via: ['DHNE', 'KRNT', 'GWD'], rakeType: 'LHB', stops: ['DHNE', 'KRNT', 'GWD', 'MBNR', 'JCL', 'KCG', 'SC'] },
@@ -1448,6 +1645,7 @@ function physics(dt, fx = {}) {
     ? Math.max(minS, state.sFront - state.speed * dt)
     : Math.min(end, state.sFront + state.speed * dt);
   const kmh = state.speed * 3.6;
+  updateTutorial();
 
   // Signal passed at danger. Policy: Kavach brakes before the signal; if it is
   // off (or the driver overruns anyway) the train-stop trips the emergency brake
@@ -1658,6 +1856,7 @@ function renderStopsPanel() {
 
 function updateHud(limit) {
   const kmh = state.speed * 3.6;
+  updateTutorial();
   $('speed').textContent = Math.round(kmh);
   $('limit').textContent = `${Math.round(limit)}`;
   const nl = ops.nextLimit(state.sFront, limit, 2500);
@@ -1699,8 +1898,22 @@ function updateHud(limit) {
   $('delay').textContent = d > 1 ? `Late ${Math.round(d)} min` : d < -1 ? `Ahead ${Math.round(-d)} min` : 'On time';
   $('delay').style.color = d > 1 ? '#fca5a5' : '#86efac';
   const topTrain = ['VANDE_BHARAT', 'VANDE_BHARAT_ORANGE', 'RAJDHANI', 'DURANTO'].includes(state.rakeType);
-  const canAskPrio = d > 30 && !topTrain && !!ops.nextStation(state.sFront);
-  if ($('btn-priority')) $('btn-priority').classList.toggle('show', canAskPrio);
+  const nstPrio = ops.nextStation(state.sFront);
+  if (state.priorityReqStation != null && (!nstPrio || nstPrio.index > state.priorityReqStation)) {
+    state.priorityReqStation = null;
+    state.priorityOutcome = null;
+    if ($('priority-status')) $('priority-status').style.display = 'none';
+  }
+  const canAskPrio = d > 30 && !topTrain && !!nstPrio;
+  const prioRequested = canAskPrio && state.priorityReqStation === nstPrio.index;
+  for (const id of ['btn-priority', 'btn-priority-ctl']) {
+    const el = $(id);
+    if (!el) continue;
+    el.disabled = !canAskPrio || isLockedMode();
+    el.classList.toggle('show', canAskPrio);
+    el.classList.toggle('prio-ok', prioRequested && state.priorityOutcome === 'approved');
+    el.classList.toggle('prio-denied', prioRequested && state.priorityOutcome === 'denied');
+  }
   $('score').textContent = `${scorer.total()} · comfort ${Math.round(scorer.comfort)}%`;
   const sigs = ops.signalsAhead(state.sFront, 1);
   const sig = sigs[0];
@@ -1778,12 +1991,38 @@ function updateHud(limit) {
 let last = performance.now();
 let ttTimer = 0;
 let fpsAcc = 0, fpsN = 0;
+let vrThrottleCooldown = 0, vrCamHeld = false, vrLightHeld = false;
+function pollVrControllers(dt) {
+  const session = renderer.xr.isPresenting ? renderer.xr.getSession() : null;
+  if (!session) return;
+  vrThrottleCooldown = Math.max(0, vrThrottleCooldown - dt);
+  for (const src of session.inputSources) {
+    const gp = src.gamepad;
+    if (!gp) continue;
+    const stickY = gp.axes[3] ?? gp.axes[1] ?? 0;
+    if (Math.abs(stickY) > 0.55 && vrThrottleCooldown <= 0) {
+      if (stickY < -0.55) stepNotch(1);
+      else stepNotch(-1);
+      vrThrottleCooldown = 0.22;
+    }
+    if (gp.buttons[0]?.pressed) state.brake = Math.min(1, state.brake + dt * 0.65); // trigger: brake
+    if (gp.buttons[1]?.pressed) state.brake = Math.max(0, state.brake - dt * 0.85); // grip: release brake
+    if (gp.buttons[4]?.pressed) audio.horn(true); // A / X: horn
+    if (gp.buttons[5]?.pressed) {
+      if (!vrCamHeld) { vrCamHeld = true; rig.setMode((rig.mode + 1) % CAMERA_MODES.length); $('sel-cam').value = rig.mode; }
+    } else vrCamHeld = false;
+    if (gp.buttons[3]?.pressed) {
+      if (!vrLightHeld) { vrLightHeld = true; $('btn-lights')?.click(); }
+    } else vrLightHeld = false;
+  }
+}
 renderer.setAnimationLoop(() => {
   const now = performance.now();
   const frameMs = now - last;
   if (frameMs > 70 && layout && !busy) (window.__railsimFrames ||= []).push({ at: Math.round(state.sFront), ms: Math.round(frameMs), prev: world?.lastBuild || '' });
   const rawDt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  pollVrControllers(rawDt);
   if (smScene && stationMaster.running && world && !busy) { // Station Master: the driving sim pauses meanwhile
     // steady 60 fps option: skip display refreshes that come too soon (keeps motion even on 90/120/144 Hz screens)
     if (smGfx.cap && now - smGfx.lastFrame < 1000 / 60 - 2) { last = now - rawDt * 1000; return; }
@@ -1955,6 +2194,7 @@ renderer.setAnimationLoop(() => {
 // ======================================================================
 function trackJourney(dt, limit) {
   const kmh = state.speed * 3.6;
+  updateTutorial();
   const accel = (state.speed - (state._prevSpeed ?? state.speed)) / Math.max(dt, 1e-3);
   state._prevSpeed = state.speed;
   if (dt > 0) scorer.update(dt, { kmh, limit, accel, emergency: state.emergency, km: layout.realKmAt(state.sFront) });

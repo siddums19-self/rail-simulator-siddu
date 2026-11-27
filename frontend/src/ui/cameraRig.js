@@ -44,8 +44,12 @@ export class CameraRig {
     this.panOffset = new THREE.Vector3();
     this.look = { yaw: 0, pitch: -0.04, dragging: false, fov: 62 };
     this.track = null;
+    this.xrRig = null;
+    this.xrActive = false;
     this._bindLook();
   }
+
+  setXrRig(rig) { this.xrRig = rig; }
 
   _bindLook() {
     const el = this.dom;
@@ -153,22 +157,30 @@ export class CameraRig {
     const m = CAMERA_MODES[this.mode];
     this._applyHeld(dt);
     const cam = this.camera;
+    const xr = this.xrActive && this.xrRig;
+    const poseTarget = xr ? this.xrRig : cam;
+    if (!xr && this.xrRig) { this.xrRig.position.set(0, 0, 0); this.xrRig.quaternion.identity(); }
     if (m.kind === 'look') {
       const veh = m.id === 'cab' || m.id === 'crew' ? state.lead : m.id === 'guard' ? (state.tail || state.window) : state.window;
       const local = m.id === 'cab' ? (veh.cabEyeDriver || veh.cabEye || new THREE.Vector3(-0.6, 3.0, -veh.length / 2 + 1.5))
         : m.id === 'crew' ? (veh.cabEye || new THREE.Vector3(0, 3.2, -veh.length / 2 + 2.4))
         : m.id === 'guard' ? (veh.guardEye || new THREE.Vector3(0, 2.7, veh.length / 2 - 2.4)) : new THREE.Vector3(1.05, 2.45, 0);
       veh.group.updateMatrixWorld();
-      cam.position.copy(local).applyMatrix4(veh.group.matrixWorld);
+      poseTarget.position.copy(local).applyMatrix4(veh.group.matrixWorld);
+      if (xr) poseTarget.position.y -= 1.45; // compensate for standing/seated VR headset height
       veh.group.getWorldQuaternion(_q);
-      _e.set(this.look.pitch, this.look.yaw, 0, 'YXZ');
-      cam.quaternion.copy(_q).multiply(new THREE.Quaternion().setFromEuler(_e));
-      this._setFov(this.look.fov, cam);
-      cam.near = 0.08;
-      cam.updateProjectionMatrix();
+      if (xr) {
+        poseTarget.quaternion.copy(_q);
+      } else {
+        _e.set(this.look.pitch, this.look.yaw, 0, 'YXZ');
+        cam.quaternion.copy(_q).multiply(new THREE.Quaternion().setFromEuler(_e));
+        this._setFov(this.look.fov, cam);
+        cam.near = 0.08;
+        cam.updateProjectionMatrix();
+      }
       return;
     }
-    cam.near = 0.3;
+    if (!xr) cam.near = 0.3;
     if (m.kind === 'trackside') {
       const ahead = state.sFront + 320;
       if (!this.track || state.sFront > this.track.s + 160 || state.sFront < this.track.s - 700) {
@@ -178,14 +190,17 @@ export class CameraRig {
         p.y = Math.max(p.y, this.heightAt(p.x, p.z)) + 1.7;
         this.track = { s: ahead, p };
       }
-      cam.position.copy(this.track.p);
+      poseTarget.position.copy(this.track.p);
+      if (xr) poseTarget.position.y -= 1.45;
       state.mid.group.getWorldPosition(_v);
       state.lead.group.getWorldPosition(this.anchor);
       _v.lerp(this.anchor, 0.6);
       _v.y += 2.2;
-      cam.lookAt(_v);
-      this._setFov(this.look.fov * 0.8, cam);
-      cam.updateProjectionMatrix();
+      poseTarget.lookAt(_v);
+      if (!xr) {
+        this._setFov(this.look.fov * 0.8, cam);
+        cam.updateProjectionMatrix();
+      }
       return;
     }
     // orbit modes
@@ -197,7 +212,7 @@ export class CameraRig {
     if (this._needsPlace || !this.lastAnchor) {
       _v.set(...m.offset);
       _v.applyAxisAngle(UP, -heading);
-      cam.position.copy(this.anchor).add(_v);
+      poseTarget.position.copy(this.anchor).add(_v);
       this.controls.target.copy(this.anchor);
       this.lastAnchor = this.anchor.clone();
       this.lastHeading = heading;
@@ -206,18 +221,22 @@ export class CameraRig {
       // carry pan offset + camera with the moving anchor
       const target = _v.copy(this.anchor).add(this.panOffset);
       const delta = target.clone().sub(this.controls.target);
-      cam.position.add(delta);
+      poseTarget.position.add(delta);
       this.controls.target.copy(target);
       if (m.follow) {
         let dh = heading - this.lastHeading;
         dh = Math.atan2(Math.sin(dh), Math.cos(dh));
         if (Math.abs(dh) > 1e-6) {
-          const off = cam.position.clone().sub(this.controls.target).applyAxisAngle(UP, -dh);
-          cam.position.copy(this.controls.target).add(off);
+          const off = poseTarget.position.clone().sub(this.controls.target).applyAxisAngle(UP, -dh);
+          poseTarget.position.copy(this.controls.target).add(off);
           this.panOffset.applyAxisAngle(UP, -dh);
         }
       }
       this.lastHeading = heading;
+    }
+    if (xr) {
+      poseTarget.lookAt(this.controls.target);
+      return;
     }
     this._setFov(55, cam);
     this.controls.update(dt);
