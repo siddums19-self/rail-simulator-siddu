@@ -197,9 +197,24 @@ function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* 
 function placeToastContainer() {
   const host = $('toast');
   if (!host) return;
-  const bar = document.querySelector('#top > .panel');
-  const topPx = bar && bar.offsetParent !== null ? Math.round(bar.getBoundingClientRect().bottom + 10) : 12;
-  host.style.top = `${Math.max(12, topPx)}px`;
+  let minTop = innerHeight - 108;
+  for (const id of ['strip', 'dash']) {
+    const el = $(id);
+    if (el && getComputedStyle(el).display !== 'none') {
+      const r = el.getBoundingClientRect();
+      if (r.height > 0) minTop = Math.min(minTop, r.top);
+    }
+  }
+  const sr = $('strip')?.getBoundingClientRect();
+  if (sr && sr.width > 0) {
+    host.style.left = `${Math.round(sr.left + sr.width / 2)}px`;
+    host.style.maxWidth = `${Math.max(260, Math.round(sr.width - 12))}px`;
+  } else {
+    host.style.left = '50%';
+    host.style.maxWidth = 'min(440px, 86vw)';
+  }
+  host.style.top = 'auto';
+  host.style.bottom = `${Math.max(114, Math.round(innerHeight - minTop + 10))}px`;
 }
 
 function toast(msg, kind = '', ms = 3200) {
@@ -224,7 +239,7 @@ function toast(msg, kind = '', ms = 3200) {
   close.onclick = dismiss;
   item.append(txt, close);
   host.appendChild(item);
-  while (host.children.length > 3) host.firstElementChild.remove();
+  while (host.children.length > 2) host.firstElementChild.remove();
   timer = setTimeout(dismiss, ms);
 }
 
@@ -610,11 +625,17 @@ $('btn-auto').onclick = () => {
 };
 const cycle = (v) => (v === 'auto' ? 'on' : v === 'on' ? 'off' : 'auto');
 const label = (v) => v.charAt(0).toUpperCase() + v.slice(1);
+function radioSpeak(text) {
+  if (!audio.enabled || !audio.announcements) return;
+  audio.radioChirp?.();
+  setTimeout(() => stationAudio.say(text, false), 140);
+}
 function toggleLights() {
   state.lights = cycle(state.lights);
   $('btn-lights').textContent = `Lights: ${label(state.lights)}`;
   $('btn-lights').classList.toggle('on', state.lights === 'on');
   $('btn-lights').classList.toggle('auto-on', state.lights === 'auto');
+  if (state.night > 0.5 && state.lights === 'off') state._dimmedAt = performance.now();
 }
 function toggleWipers() { state.wipers = cycle(state.wipers); $('btn-wipers').textContent = `Wipers: ${label(state.wipers)}`; $('btn-wipers').classList.toggle('on', state.wipers === 'on'); }
 $('btn-lights').onclick = toggleLights;
@@ -1076,6 +1097,9 @@ const SIM_GUIDE_ITEMS = [
   { cat: 'controls', icon: '📡', name: 'Live Radar', key: '—', desc: 'Shows nearby AI trains within 6 km: AHEAD (same direction), ONCOMING (opposite direction), OVERTAKING, and CROSSING.' },
   { cat: 'hud', icon: '🥽', name: 'VR 360°', key: '—', desc: 'Enters WebXR 360° VR mode (Meta Quest Browser / HTTPS). Thumbstick: Throttle, Trigger/Grip: Brake, A/X: Horn, B/Y: Camera.' },
   { cat: 'hud', icon: '🎥', name: 'Camera Views & Pad', key: '1–9, C', desc: 'Switch between front cab, exterior, guard van (8), and crew (9) views, or pan/orbit/zoom using the Camera Pad (can be minimized with −).' },
+  { cat: 'hud', icon: '⚡', name: 'Sim Speed (1×–10×)', key: '—', desc: 'Changes simulation speed from real-time (1×) up to 2×, 5×, or 10× for faster long-distance runs. Remains adjustable in Daily Challenge & Multiplayer.' },
+  { cat: 'hud', icon: '📏', name: 'Distance Scale (1:1 / 1:10)', key: '—', desc: 'Exact 1:1 uses real-world km between stations; Compact 1:10 shortens inter-station runs 10× for quick play (restarts the route; locked in Daily/MP).' },
+  { cat: 'hud', icon: '🌦', name: 'Weather, Festival & Time', key: '—', desc: 'Switch between Clear, Heat Haze, Monsoon, Winter Fog, Dynamic, or Live weather, station festivals, and time-of-day presets.' },
   { cat: 'hud', icon: '➖', name: 'Minimize Panels', key: '—', desc: 'Use − / + on the Left Journey panel, Right Weather/Sim panel, Camera Pad, and Speedometer (collapses to speed only).' },
   { cat: 'hud', icon: '◀▶', name: 'Station Strip Slider', key: '—', desc: 'Scroll left/right across long routes with many stations so station names never overlap.' },
   { cat: 'save', icon: '⌂', name: 'Main menu', key: '—', desc: 'Returns to the main dashboard.' },
@@ -1083,9 +1107,15 @@ const SIM_GUIDE_ITEMS = [
   { cat: 'save', icon: '👤', name: 'Account / Login', key: '—', desc: 'Log in or sign up (pauses the active game for a fresh login) or log out to drive as guest.' }
 ];
 let guideCat = 'all';
+function filteredGuideItems() {
+  const q = ($('guide-search')?.value || '').trim().toLowerCase();
+  return SIM_GUIDE_ITEMS.filter((x) => (guideCat === 'all' || x.cat === guideCat) && (!q || `${x.name} ${x.key} ${x.desc}`.toLowerCase().includes(q)));
+}
 function renderGuide() {
-  const list = guideCat === 'all' ? SIM_GUIDE_ITEMS : SIM_GUIDE_ITEMS.filter((x) => x.cat === guideCat);
-  $('guide-grid').innerHTML = list.map((x, idx) => `<button type="button" class="guide-item" data-gidx="${idx}"><b>${x.icon} ${x.name} <span class="muted" style="font-weight:400;">(${x.key})</span></b><small>${x.desc}</small></button>`).join('');
+  const list = filteredGuideItems();
+  $('guide-grid').innerHTML = list.length
+    ? list.map((x, idx) => `<button type="button" class="guide-item" data-gidx="${idx}"><b>${x.icon} ${x.name} <span class="muted" style="font-weight:400;">(${x.key})</span></b><small>${x.desc}</small></button>`).join('')
+    : '<div class="muted" style="padding:12px;">No matching controls found.</div>';
   document.querySelectorAll('#guide-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.gcat === guideCat));
 }
 $('tile-guide').onclick = () => { renderGuide(); $('guide-modal').style.display = 'flex'; };
@@ -1159,9 +1189,10 @@ if ($('btn-guide')) $('btn-guide').onclick = () => { if (layout && !state.paused
 $('guide-close').onclick = () => { $('guide-modal').style.display = 'none'; };
 $('guide-drive').onclick = () => { $('guide-modal').style.display = 'none'; if (layout) { togglePause(false); } else { $('tile-drive').click(); } };
 $('guide-tabs').onclick = (e) => { const b = e.target.closest('[data-gcat]'); if (!b) return; guideCat = b.dataset.gcat; renderGuide(); };
+if ($('guide-search')) $('guide-search').oninput = () => renderGuide();
 $('guide-grid').onclick = (e) => {
   const item = e.target.closest('[data-gidx]'); if (!item) return;
-  const list = guideCat === 'all' ? SIM_GUIDE_ITEMS : SIM_GUIDE_ITEMS.filter((x) => x.cat === guideCat);
+  const list = filteredGuideItems();
   const x = list[Number(item.dataset.gidx)]; if (!x) return;
   $('guide-grid').querySelectorAll('.guide-item').forEach((el) => el.classList.remove('on'));
   item.classList.add('on');
@@ -1830,7 +1861,12 @@ function handleEvents(events) {
     if (ev.type === 'ready') {
       const dep = timetable.schedDep(st);
       if (dep != null && minDiff(state.gameMinutes, dep) < -0.5) toast(`${st.name}: dwell complete, starter OFF — but booked departure is ${fmtClock(dep)}. Wait for right time (leaving early is penalised).`, 'warn', 6000);
-      else { state.dueShown = st; toast(`🟢 ${st.name}: Guard & SM All-Right green flag/lamp exchanged — right away! Starter cleared.`, 'ok', 4200); audio.hornBlip(0.5); }
+      else {
+        state.dueShown = st;
+        toast(`🟢 ${st.name}: Guard & SM All-Right green flag/lamp exchanged — right away! Starter cleared.`, 'ok', 4200);
+        audio.hornBlip(0.5);
+        radioSpeak(`Loco Pilot from Guard at ${spokenName(st.name)}. All right, starter cleared, right away.`);
+      }
     }
   }
 }
@@ -1906,13 +1942,12 @@ function updateHud(limit) {
   }
   const canAskPrio = d > 30 && !topTrain && !!nstPrio;
   const prioRequested = canAskPrio && state.priorityReqStation === nstPrio.index;
-  for (const id of ['btn-priority', 'btn-priority-ctl']) {
-    const el = $(id);
-    if (!el) continue;
-    el.disabled = !canAskPrio || isLockedMode();
-    el.classList.toggle('show', canAskPrio);
-    el.classList.toggle('prio-ok', prioRequested && state.priorityOutcome === 'approved');
-    el.classList.toggle('prio-denied', prioRequested && state.priorityOutcome === 'denied');
+  const prioEl = $('btn-priority-ctl');
+  if (prioEl) {
+    prioEl.disabled = !canAskPrio || isLockedMode();
+    prioEl.classList.toggle('show', canAskPrio && !isLockedMode());
+    prioEl.classList.toggle('prio-ok', prioRequested && state.priorityOutcome === 'approved');
+    prioEl.classList.toggle('prio-denied', prioRequested && state.priorityOutcome === 'denied');
   }
   $('score').textContent = `${scorer.total()} · comfort ${Math.round(scorer.comfort)}%`;
   const sigs = ops.signalsAhead(state.sFront, 1);
@@ -2163,13 +2198,35 @@ renderer.setAnimationLoop(() => {
     for (const c of W?.coasts || []) if (sF > c.s0 && sF < c.s1) sea = Math.max(sea, 1 - Math.min(1, Math.abs(sF - c.st.layout.sCenter) / 6000) * 0.6);
     audio.ambience({ river, lake, sea, interior: CAMERA_MODES[rig.mode].kind === 'look' });
   }
+  const nearPass = nearestPassing();
+  // Mandatory W/L whistle check before level crossings + night headlight dimming etiquette
+  if (world?.lcs && state.speed > 2) {
+    for (const lc of world.lcs) {
+      const dLc = lc.s - state.sFront;
+      if (dLc > 0 && dLc < 240 && !lc._whistled && audio.hornHeld) {
+        lc._whistled = true;
+        scorer?.add(25, 'W/L whistle acknowledged');
+        toast('🔊 Level crossing W/L whistle acknowledged (+25)', 'ok', 2000);
+      } else if (dLc < -25 && dLc > -60 && !lc._whistled && !lc._missed) {
+        lc._missed = true;
+        scorer?.add(-15, 'Missed W/L whistle before level crossing');
+      }
+    }
+  }
+  if (state.night > 0.5 && nearPass && nearPass.dist < 160 && state._dimmedAt && (performance.now() - state._dimmedAt) < 12000) {
+    state._dimmedAt = 0;
+    scorer?.add(20, 'Headlight dimmed for oncoming train');
+    toast('💡 Headlight dimmed for oncoming train (+20)', 'ok', 2200);
+  }
+  const inTunnel = !!layout.tunnels?.some((t) => state.sFront >= t.s0 && state.sFront - consist.length <= t.s1);
   audio.update(rawDt, {
     speedKmph: state.speed * 3.6, notch: state.traction === 'electric' && !state.panto ? 0 : Math.max(0, state.notch), brake: Math.round(state.brakeEff * 100),
     traction: state.traction, onTurnout: ops.lane.inTransition(state.sFront - 6),
     interior: CAMERA_MODES[rig.mode].kind === 'look', distanceStep: state.speed * dt, weather: state.weather, wipers: wipersOn,
     curveR: layout.curveAt(state.sFront - 10)?.R || 0,
     onBridge: layout.path.yAt(state.sFront) - layout.path.groundAt(state.sFront) > 3,
-    passing: nearestPassing()
+    inTunnel,
+    passing: nearPass
   });
   const nearSt = layout.stationAt(state.sFront, 300);
   stationAudio.update(rawDt, {

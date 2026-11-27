@@ -112,7 +112,13 @@ export class WeatherOps {
     // Fog Safety Device: beeps at 500 / 250 / 100 m from each signal
     if (this.weather === 'FOG' && nextSignalDist != null) {
       const band = nextSignalDist < 100 ? 3 : nextSignalDist < 250 ? 2 : nextSignalDist < 500 ? 1 : 0;
-      if (band > (this.fsdBand ?? 0)) { for (let i = 0; i < band; i++) setTimeout(() => this.audio.beep?.(), i * 180); }
+      if (band > (this.fsdBand ?? 0)) {
+        for (let i = 0; i < band; i++) setTimeout(() => this.audio.beep?.(), i * 180);
+        if (band === 2) {
+          this.audio.detonator?.();
+          this.toast('💥 Fog detonators exploded — signal 250 m ahead!', 'warn', 2800);
+        }
+      }
       this.fsdBand = band;
     }
     const scorer = this.getScorer();

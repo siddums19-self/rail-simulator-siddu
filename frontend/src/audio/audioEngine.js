@@ -548,6 +548,14 @@ export class AudioEngine {
     const brp = ctx.createBiquadFilter(); brp.type = 'peaking'; brp.frequency.value = 85; brp.gain.value = 9; brp.Q.value = 2;
     this.bridgeGain = ctx.createGain(); this.bridgeGain.gain.value = 0;
     br.connect(brl).connect(brp).connect(this.bridgeGain).connect(this.master); br.start();
+    // echoing tunnel roar
+    const tn = ctx.createBufferSource(); tn.buffer = this.noiseBuf; tn.loop = true; tn.playbackRate.value = 1.1;
+    const tnb = ctx.createBiquadFilter(); tnb.type = 'bandpass'; tnb.frequency.value = 260; tnb.Q.value = 0.9;
+    this.tunnelGain = ctx.createGain(); this.tunnelGain.gain.value = 0;
+    tn.connect(tnb).connect(this.tunnelGain);
+    this.tunnelGain.connect(this.master);
+    this.tunnelGain.connect(this.reverb);
+    tn.start();
     // passing train roar
     const pr = ctx.createBufferSource(); pr.buffer = this.noiseBuf; pr.loop = true; pr.playbackRate.value = 1.4;
     const prl = ctx.createBiquadFilter(); prl.type = 'lowpass'; prl.frequency.value = 1200;
@@ -606,7 +614,27 @@ export class AudioEngine {
     for (let k = 0; k < 5; k++) this._click(t + k * (0.18 + Math.random() * 0.12), gain * (1 - k * 0.12), false);
   }
 
-  update(dt, { speedKmph, notch, brake, traction, onTurnout, interior, distanceStep, weather, curveR = 0, onBridge = false, passing = null, wipers = false }) {
+  detonator() {
+    if (!this.enabled || !this.ctx) return;
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    for (const off of [0, 0.18]) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'triangle'; o.frequency.setValueAtTime(220, t0 + off); o.frequency.exponentialRampToValueAtTime(55, t0 + off + 0.09);
+      g.gain.setValueAtTime(0.45, t0 + off); g.gain.exponentialRampToValueAtTime(0.001, t0 + off + 0.11);
+      o.connect(g).connect(this.master); o.start(t0 + off); o.stop(t0 + off + 0.12);
+    }
+  }
+
+  radioChirp() {
+    if (!this.enabled || !this.ctx) return;
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(1450, t0); o.frequency.setValueAtTime(1850, t0 + 0.045);
+    g.gain.setValueAtTime(0.08, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.09);
+    o.connect(g).connect(this.master); o.start(t0); o.stop(t0 + 0.1);
+  }
+
+  update(dt, { speedKmph, notch, brake, traction, onTurnout, interior, distanceStep, weather, curveR = 0, onBridge = false, inTunnel = false, passing = null, wipers = false }) {
     this.traction = traction;
     // windscreen wipers (heard from inside the cab), synced with the visible blades
     if (wipers && interior && this.enabled && this.ctx) {
@@ -623,6 +651,7 @@ export class AudioEngine {
       const sq = curveR > 0 && curveR < 900 && v > 3 ? Math.min(1, (900 - curveR) / 500) * Math.min(1, v / 12) * (v < 25 ? 1 : 0.4) : 0;
       this.squealGain.gain.setTargetAtTime(on * sq * (interior ? 0.006 : 0.012) * (0.6 + 0.4 * Math.sin(t * 1.7)), t, 0.25);
       this.bridgeGain.gain.setTargetAtTime(on * (onBridge ? Math.min(0.5, v * 0.02) : 0), t, 0.3);
+      if (this.tunnelGain) this.tunnelGain.gain.setTargetAtTime(on * (inTunnel ? Math.min(0.42, v * 0.022) : 0), t, 0.2);
       // passing train
       if (passing && passing.dist < 250) {
         const k = 1 - passing.dist / 250;

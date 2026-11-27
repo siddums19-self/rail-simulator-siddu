@@ -23,6 +23,7 @@ import { buildJunctionSplits } from './junctionSplits.js';
 import { buildGodavariBridges } from './godavariBridge.js';
 import { buildKrishnaBridges } from './krishnaBridge.js';
 import { buildDudhsagarViaduct } from './dudhsagar.js';
+import { buildTunnels } from './tunnels.js';
 import { M } from '../core/materials.js';
 
 const constLanes = new Map();
@@ -70,6 +71,7 @@ export class World {
     if (layout.godavari) buildGodavariBridges(this.root, layout);
     if (layout.krishna) buildKrishnaBridges(this.root, layout);
     if (layout.dudhsagar) this.dudhsagarAnim = buildDudhsagarViaduct(this.root, layout);
+    if (layout.tunnels?.length) buildTunnels(this.root, layout);
     this.props = new PropBuilder({
       layout, terrain: this.terrain, seedKey, density,
       exclusion: (x, z) => !!((this.scIndex && this.scIndex.distance(x, z, 60) < 16) || (this.airportPlan && Math.hypot(x - this.airportPlan.x, z - this.airportPlan.z) < 880) || (this.gtl && this.gtl.exclusion(x, z)) || (this.gtlW && this.gtlW.exclusion(x, z)) || this.water.contains(x, z)),

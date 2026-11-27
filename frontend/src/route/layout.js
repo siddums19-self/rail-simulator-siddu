@@ -539,8 +539,23 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
   const trackMin = o.terminal ? o.layout.pStart - 25 : 0;
   const trackMax = d.terminal ? d.layout.pEnd + 25 : total;
 
+  // ---- Curated tunnels (only a few, in hilly/ghat open-track gaps)
+  const HILL_BIOMES = new Set(['KONKAN_COAST', 'WESTERN_GHATS_URBAN', 'WESTERN_GHATS_PLATEAU', 'NALLAMALA_COASTAL', 'EASTERN_GHATS_DECCAN', 'ARAVALLI_RAJASTHAN']);
+  const tunnels = [];
+  for (let i = 0; i < gaps.length && tunnels.length < 3; i++) {
+    const g = gaps[i];
+    if (g.special || (g.s1 - g.s0) < 2200) continue;
+    const midS = (g.s0 + g.s1) * 0.5;
+    if (!HILL_BIOMES.has(biomeAt(midS).a)) continue;
+    if (godavari && midS > godavari.s0 - 400 && midS < godavari.s1 + 400) continue;
+    if (krishna && midS > krishna.s0 - 400 && midS < krishna.s1 + 400) continue;
+    if (dudhsagar && midS > dudhsagar.sMid - 600 && midS < dudhsagar.sMid + 600) continue;
+    const len = 280 + (i % 2) * 80;
+    tunnels.push({ s0: midS - len * 0.5, s1: midS + len * 0.5, name: `Tunnel ${tunnels.length + 1}` });
+  }
+
   return {
-    stations, gaps, path, total, trackMin, trackMax, gtl, gtlWest, godavari, krishna, dudhsagar, rivers, curves, curveAt,
+    stations, gaps, path, total, trackMin, trackMax, gtl, gtlWest, godavari, krishna, dudhsagar, rivers, tunnels, curves, curveAt,
     realKmAt, sAtRealKm, biomeAt, stationAt, lineAt, gapAt, flatHalfWidth, buildLane,
     playerMainAt: (sv) => playerMain(lineAt(sv)),
     totalRealKm: plan.route.totalRealKm

@@ -9,8 +9,8 @@ import { makeRng, range, pick } from './core/rng.js';
 //
 // update() returns effects for the physics: { tractionCut, forcedSpeed, extraTE, lurch }.
 
-const TYPES = ['hotAxle', 'ohe', 'signal', 'gate'];
-const NAMES = { cattle: 'Cattle run-over', hotAxle: 'Hot axle', ohe: 'OHE fault: dead section', signal: 'Signal failure', gate: 'Level-crossing gate open', stall: 'Stalled on a rising gradient' };
+const TYPES = ['hotAxle', 'ohe', 'signal', 'gate', 'acp'];
+const NAMES = { cattle: 'Cattle run-over', hotAxle: 'Hot axle', ohe: 'OHE fault: dead section', signal: 'Signal failure', gate: 'Level-crossing gate open', stall: 'Stalled on a rising gradient', acp: 'Alarm Chain Pulling (ACP)' };
 
 export class Incidents {
   constructor({ layout, ops, world, audio, scorer, toast, seedKey, rakeType, goods }) {
@@ -98,6 +98,35 @@ export class Incidents {
     });
     inc.s = sim.sFront;
     this._penalty(inc, -100, 'Stalled on the bank');
+  }
+
+  // ------------------------------------------------------------ Alarm Chain Pulling (ACP)
+  _start_acp(sim) {
+    if (this.goods || this.layout.stationAt(sim.sFront, 400) || sim.speed < 25 / 3.6) return false;
+    const coach = this._vehicleName();
+    const inc = this._begin('acp', {
+      coach,
+      text: `Guard radio: "Loco Pilot, Alarm Chain Pulled in ${coach}! Brake pipe pressure is dropping — bring the train to a halt so I can reset it."`,
+      steps: [{ label: 'Bring train to a halt' }, { label: `Guard inspects & resets ACP in ${coach}` }, { label: 'Guard All-Right — resume' }]
+    });
+    this._setPhase(inc, 'stop');
+    this.toast(`⚠ ACP in ${coach} — Guard says stop to reset!`, 'warn', 5000);
+    return true;
+  }
+
+  _acp(inc, dt, sim, fx) {
+    fx.tractionCut = true;
+    if (inc.phase === 'stop') {
+      fx.forcedSpeed = 0;
+      if (sim.speed < 0.3) { this._step(inc, 0, 'done'); this._setPhase(inc, 'resetting'); }
+    } else if (inc.phase === 'resetting') {
+      fx.forcedSpeed = 0;
+      if (inc.pt > 6) {
+        this._step(inc, 1, 'done'); this._step(inc, 2, 'done');
+        this.audio.hornBlip?.(0.5);
+        this._finish(inc, true, 30, `ACP reset in ${inc.coach} — Guard All-Right!`);
+      }
+    }
   }
 
   // ------------------------------------------------------------ cattle run-over
@@ -387,6 +416,9 @@ export class Incidents {
       case 'stall':
         actions = btn('banker', 'Request banker', inc.phase === 'request');
         if (inc.phase === 'coming') status = 'Banker on its way…';
+        break;
+      case 'acp':
+        status = inc.phase === 'stop' ? 'Brake pipe dropping — bring the train to a halt.' : 'Guard walking back to reset the ACP valve…';
         break;
     }
     return `<div class="title">⚠ ${inc.title}</div><div class="inc-text">${inc.text}</div><ol class="inc-steps">${steps}</ol>${status ? `<div class="inc-status">${status}</div>` : ''}${actions ? `<div class="row">${actions}</div>` : ''}`;
