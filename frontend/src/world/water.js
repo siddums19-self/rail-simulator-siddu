@@ -41,13 +41,16 @@ const LAKE_DENSITY = {
 };
 
 // ---- rivers along the route (route distance s), computed inside the layout before the path is built
-export function planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm, godavari = null, krishna = null }) {
+export function planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm, godavari = null, krishna = null, dudhsagar = null }) {
   const rivers = [];
   if (godavari) {
     rivers.push({ s: godavari.sMid, width: godavari.riverWidth, depth: godavari.depth, name: 'Godavari', big: true, godavari: true });
   }
   if (krishna) {
     rivers.push({ s: krishna.sMid, width: krishna.riverWidth, depth: krishna.depth, name: 'Krishna', big: true, krishna: true });
+  }
+  if (dudhsagar) {
+    rivers.push({ s: dudhsagar.sMid, width: dudhsagar.riverWidth, depth: dudhsagar.depth, name: 'Dudhsagar Falls', big: true, dudhsagar: true });
   }
   const nearStation = (s, pad) => stations.some((st) => s > st.layout.zoneStart - pad && s < st.layout.zoneEnd + pad);
   // legs -> route km where each leg starts

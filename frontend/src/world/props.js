@@ -126,7 +126,7 @@ export class PropBuilder {
         const sc = range(rand, 0.75, 1.3);
         const ry = rand() * Math.PI * 2;
         L(kind + 't', trunkGeo[kind](), kind === 'tall' ? M.plaster(0xc8bfae) : M.bark()).push(pos.x, pos.y - 0.1, pos.z, ry, sc);
-        L(kind + 'c', canopyGeo[kind](), leafMat(0xffffff, kind === 'palm')).push(pos.x, pos.y - 0.1, pos.z, ry, sc, sc, jitterColor(leafHex[kind], rand, 0.18));
+        L(kind + 'c', canopyGeo[kind](), leafMat(0xffffff, true)).push(pos.x, pos.y - 0.1, pos.z, ry, sc, sc, jitterColor(leafHex[kind], rand, 0.18));
       }
     }
     // palms line village ponds / coastal fields in clusters

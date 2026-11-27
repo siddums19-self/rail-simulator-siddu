@@ -444,8 +444,28 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
     }
   }
 
+  // ---- Dudhsagar Waterfall & Arched Viaduct after crossing DDS toward CLR/UBL (or between QLM and CLR when DDS* is skipped).
+  let dudhsagar = null;
+  for (let i = 0; i < stations.length - 1; i++) {
+    const a = stations[i].code, b = stations[i + 1].code;
+    const isDdsClr = (a === 'DDS' && b === 'CLR') || (a === 'CLR' && b === 'DDS');
+    const isQlmClr = (a === 'QLM' && b === 'CLR') || (a === 'CLR' && b === 'QLM');
+    if (isDdsClr || isQlmClr) {
+      const g = gaps[i];
+      const len = g.s1 - g.s0;
+      if (len >= 500) {
+        const towardUbl = (a === 'DDS' || a === 'QLM');
+        const sMid = isDdsClr
+          ? (towardUbl ? g.s0 + Math.min(350, len * 0.4) : g.s1 - Math.min(350, len * 0.4))
+          : (towardUbl ? g.s0 + len * 0.6 : g.s0 + len * 0.4);
+        dudhsagar = { s0: sMid - 180, s1: sMid + 180, sMid, riverWidth: 260, depth: 20, dir: towardUbl ? 1 : -1, gapIndex: i };
+      }
+      break;
+    }
+  }
+
   // rivers: the bed lowers the natural ground under the line, so the formation puts the track on a bridge
-  const rivers = planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm, godavari, krishna });
+  const rivers = planRivers({ gaps, stations, seedKey, realKmAt, sAtRealKm, godavari, krishna, dudhsagar });
   const path = new RoutePath(total, curvatureAt, (sv) => undulation(sv) + flyover(sv), (sv) => undulation(sv) - riverCarve(rivers, sv));
 
   // ---- Biome lookup with smooth blends at junction stations.
@@ -520,7 +540,7 @@ export function buildRouteLayout(plan, { hubs, seedKey, scale = OPEN_SCALE }) {
   const trackMax = d.terminal ? d.layout.pEnd + 25 : total;
 
   return {
-    stations, gaps, path, total, trackMin, trackMax, gtl, gtlWest, godavari, krishna, rivers, curves, curveAt,
+    stations, gaps, path, total, trackMin, trackMax, gtl, gtlWest, godavari, krishna, dudhsagar, rivers, curves, curveAt,
     realKmAt, sAtRealKm, biomeAt, stationAt, lineAt, gapAt, flatHalfWidth, buildLane,
     playerMainAt: (sv) => playerMain(lineAt(sv)),
     totalRealKm: plan.route.totalRealKm

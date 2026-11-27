@@ -49,38 +49,66 @@ function deskTexture() {
   return _deskTex;
 }
 
-// Simple railway crew figure. pose: 'seated' | 'standing'
+// Anatomical railway crew figure (facing -Z). pose: 'seated' | 'standing'
 export function crewFigure({ shirt = 0xdfe8f2, pants = 0x1f2a3a, cap = null, pose = 'seated', flag = null, seed = 1 } = {}) {
   const g = new THREE.Group();
   const skin = mat([0x8d5524, 0xa0673a, 0x7a4a26][seed % 3], 0.75);
-  const top = mat(shirt, 0.8), bottom = mat(pants, 0.8);
+  const top = mat(shirt, 0.8), bottom = mat(pants, 0.8), dark = mat(0x141414, 0.55);
   const seated = pose === 'seated';
-  const hipY = seated ? 0.48 : 0.92;
-  box(g, bottom, 0, hipY, 0, 0.36, 0.2, 0.24);
-  const torso = box(g, top, 0, hipY + 0.33, 0, 0.4, 0.5, 0.24);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), skin); head.position.set(0, hipY + 0.73, -0.01); g.add(head);
-  box(g, mat(0x111111, 0.6), 0, hipY + 0.8, 0.02, 0.2, 0.08, 0.2); // hair
-  if (cap) { box(g, mat(cap, 0.6), 0, hipY + 0.86, 0, 0.24, 0.07, 0.25); box(g, mat(cap, 0.6), 0, hipY + 0.83, -0.14, 0.22, 0.02, 0.1); }
+  const hipY = seated ? 0.48 : 0.9;
+  const part = (geo, m, x, y, z, sx = 1, sy = 1, sz = 1, rx = 0) => {
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.position.set(x, y, z); mesh.scale.set(sx, sy, sz); mesh.rotation.x = rx;
+    g.add(mesh);
+    return mesh;
+  };
+  // Pelvis, waist, tapered chest, collar, belt
+  part(new THREE.CylinderGeometry(0.145, 0.14, 0.16, 12), bottom, 0, hipY + 0.03, 0, 1.12, 1, 0.76);
+  part(new THREE.CylinderGeometry(0.135, 0.142, 0.18, 12), top, 0, hipY + 0.19, 0, 1.08, 1, 0.72);
+  const torso = part(new THREE.CylinderGeometry(0.17, 0.135, 0.28, 12), top, 0, hipY + 0.41, 0, 1.18, 1, 0.74);
+  part(new THREE.TorusGeometry(0.068, 0.016, 6, 12), top, 0, hipY + 0.56, 0, 1, 1, 1, Math.PI * 0.5);
+  part(new THREE.CylinderGeometry(0.146, 0.146, 0.04, 12), dark, 0, hipY + 0.11, 0, 1.1, 1, 0.75);
+  // Neck + sculpted head, jaw, nose, ears, eyes, hair/cap (facing -Z)
+  part(new THREE.CylinderGeometry(0.048, 0.056, 0.1, 10), skin, 0, hipY + 0.6, 0);
+  const head = new THREE.Group(); head.position.set(0, hipY + 0.73, -0.005); g.add(head);
+  const addH = (geo, m, x, y, z, sx = 1, sy = 1, sz = 1, rx = 0) => {
+    const mesh = new THREE.Mesh(geo, m); mesh.position.set(x, y, z); mesh.scale.set(sx, sy, sz); mesh.rotation.x = rx; head.add(mesh);
+  };
+  addH(new THREE.SphereGeometry(0.11, 14, 12), skin, 0, 0, 0, 0.92, 1.05, 0.98);
+  addH(new THREE.CylinderGeometry(0.082, 0.056, 0.08, 10), skin, 0, -0.055, -0.015);
+  addH(new THREE.ConeGeometry(0.018, 0.045, 5), skin, 0, -0.005, -0.108, 1, 1, 1, -Math.PI * 0.45);
+  for (const s of [-1, 1]) {
+    addH(new THREE.SphereGeometry(0.022, 6, 5), skin, s * 0.1, -0.01, 0);
+    addH(new THREE.SphereGeometry(0.013, 6, 5), dark, s * 0.036, 0.018, -0.092);
+  }
+  addH(new THREE.SphereGeometry(0.115, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.56), dark, 0, 0.015, 0.005);
+  if (cap) {
+    addH(new THREE.CylinderGeometry(0.125, 0.115, 0.06, 14), mat(cap, 0.6), 0, 0.082, 0.005);
+    addH(new THREE.CylinderGeometry(0.118, 0.118, 0.018, 14), mat(0xd4af37, 0.4), 0, 0.052, 0.005);
+    addH(new THREE.CylinderGeometry(0.12, 0.12, 0.012, 12, 1, false, Math.PI - 0.9, 1.8), dark, 0, 0.042, -0.03);
+  }
   const arms = [];
   for (const side of [-1, 1]) {
-    const arm = new THREE.Group(); arm.position.set(side * 0.24, hipY + 0.53, 0);
-    box(arm, top, 0, -0.14, 0, 0.1, 0.3, 0.1);
-    const fore = new THREE.Group(); fore.position.y = -0.28; arm.add(fore);
-    box(fore, skin, 0, -0.12, 0, 0.085, 0.26, 0.085);
+    const arm = new THREE.Group(); arm.position.set(side * 0.215, hipY + 0.52, 0);
+    const ua = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.038, 0.26, 8), top); ua.position.y = -0.13; arm.add(ua);
+    const fore = new THREE.Group(); fore.position.y = -0.26; arm.add(fore);
+    const fa = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.028, 0.24, 8), skin); fa.position.y = -0.12; fore.add(fa);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.036, 7, 6), skin); hand.scale.set(0.8, 1.2, 0.6); hand.position.y = -0.25; fore.add(hand);
     arm.userData.fore = fore;
     g.add(arm); arms.push(arm);
   }
   if (seated) {
-    for (const side of [-1, 1]) { // thighs forward, shins down
-      box(g, bottom, side * 0.1, hipY - 0.02, -0.22, 0.14, 0.14, 0.46);
-      box(g, bottom, side * 0.1, hipY - 0.26, -0.44, 0.13, 0.46, 0.13);
-      box(g, mat(0x111111, 0.5), side * 0.1, 0.04, -0.5, 0.12, 0.08, 0.24);
+    for (const side of [-1, 1]) { // articulated thighs, shins, shoes
+      part(new THREE.CylinderGeometry(0.068, 0.056, 0.42, 8), bottom, side * 0.1, hipY - 0.02, -0.21, 1, 1, 1, Math.PI * 0.5);
+      part(new THREE.CylinderGeometry(0.054, 0.04, 0.42, 8), bottom, side * 0.1, hipY - 0.23, -0.42);
+      part(new THREE.BoxGeometry(0.09, 0.068, 0.22), dark, side * 0.1, 0.04, -0.47);
     }
-    for (const a of arms) { a.rotation.x = -0.9; a.userData.fore.rotation.x = -0.5; } // hands on the desk
+    for (const a of arms) { a.rotation.x = -0.9; a.userData.fore.rotation.x = -0.5; }
   } else {
     for (const side of [-1, 1]) {
-      box(g, bottom, side * 0.1, 0.46, 0, 0.14, 0.9, 0.14);
-      box(g, mat(0x111111, 0.5), side * 0.1, 0.04, -0.05, 0.12, 0.08, 0.26);
+      part(new THREE.CylinderGeometry(0.068, 0.054, 0.42, 8), bottom, side * 0.09, hipY - 0.21, 0);
+      part(new THREE.CylinderGeometry(0.052, 0.038, 0.42, 8), bottom, side * 0.09, hipY - 0.63, 0);
+      part(new THREE.BoxGeometry(0.09, 0.068, 0.22), dark, side * 0.09, 0.04, -0.05);
     }
   }
   if (flag) { // hand flag (green/red) held out in the right hand

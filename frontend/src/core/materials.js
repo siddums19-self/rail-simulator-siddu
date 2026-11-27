@@ -102,7 +102,7 @@ export const M = {
   boxnSide: () => get('boxnSide', () => new THREE.MeshStandardMaterial({ map: TX.boxnSideTexture(), metalness: 0.35, roughness: 0.7 })),
   rust: () => get('rust', () => new THREE.MeshStandardMaterial({ color: 0x5e2c1c, metalness: 0.3, roughness: 0.8 })),
   signalOff: () => get('sigOff', () => new THREE.MeshStandardMaterial({ color: 0x15181c, roughness: 0.3, metalness: 0.2 })),
-  leaf: (hex) => get('leaf' + hex, () => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.9 })),
+  leaf: (hex) => get('leaf' + hex, () => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.9, side: THREE.DoubleSide })),
   bark: () => get('bark', () => new THREE.MeshStandardMaterial({ color: 0x5a4330, roughness: 0.95 })),
   rock: () => get('rock', () => new THREE.MeshStandardMaterial({ color: 0x8a7d70, roughness: 0.95 })),
   vertexColor: () => get('vcol', () => new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 })),

@@ -43,83 +43,226 @@ function clean(g) {
 }
 const merge = (list) => mergeGeometries(list.map(clean), false);
 
+// Botanical 3D tree builders: tapered branching limbs + root flares, and layered
+// 3D leaf-sprig / pinnate-frond clusters (instead of solid icosphere blobs).
+function limb(x0, y0, z0, x1, y1, z1, r0, r1, segs = 5) {
+  const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+  const len = Math.hypot(dx, dy, dz) || 0.01;
+  const g = new THREE.CylinderGeometry(r1, r0, len, segs, 1, false);
+  const up = new THREE.Vector3(0, 1, 0);
+  const dir = new THREE.Vector3(dx / len, dy / len, dz / len);
+  const q = new THREE.Quaternion().setFromUnitVectors(up, dir);
+  const m = new THREE.Matrix4().compose(
+    new THREE.Vector3((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5),
+    q,
+    new THREE.Vector3(1, 1, 1)
+  );
+  g.applyMatrix4(m);
+  return g;
+}
+
+// A 3D leaf-sprig cluster: 3 crossed, tilted diamond-shaped leaf blades so
+// foliage reads with crisp silhouette and depth from any camera angle.
+function leafCluster(cx, cy, cz, radius, rand, flat = 0.65) {
+  const parts = [];
+  for (let i = 0; i < 3; i++) {
+    const w = radius * (0.85 + rand() * 0.35);
+    const h = radius * flat * (0.85 + rand() * 0.35);
+    const g = new THREE.BufferGeometry();
+    const verts = new Float32Array([
+      0, h, 0,
+      -w, 0, 0,
+      0, -h * 0.6, w * 0.25,
+      0, h, 0,
+      0, -h * 0.6, w * 0.25,
+      w, 0, 0,
+    ]);
+    g.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    g.computeVertexNormals();
+    g.rotateY((i / 3) * Math.PI + rand() * 0.6);
+    g.rotateX((rand() - 0.5) * 0.7);
+    g.rotateZ((rand() - 0.5) * 0.5);
+    g.translate(cx, cy, cz);
+    parts.push(g);
+  }
+  return parts;
+}
+
+function branchTree({ trunkH, rBase, rTop, lean = 0, boughs = 4, spread = 2.2, reach = 2.4, forks = 2, seed = 1, roots = 4, flat = 0.65, leafR = 0.95 }) {
+  const rand = mulberry32(seed);
+  const trunkParts = [];
+  const canopyParts = [];
+  const midX = lean * 0.4, midZ = (rand() - 0.5) * lean * 0.4;
+  trunkParts.push(limb(0, 0, 0, midX, trunkH * 0.55, midZ, rBase, (rBase + rTop) * 0.55, 7));
+  trunkParts.push(limb(midX, trunkH * 0.55, midZ, lean, trunkH, 0, (rBase + rTop) * 0.55, rTop, 6));
+  for (let r = 0; r < roots; r++) {
+    const a = (r / roots) * Math.PI * 2 + rand() * 0.4;
+    trunkParts.push(limb(Math.cos(a) * rBase * 1.65, 0, Math.sin(a) * rBase * 1.65, Math.cos(a) * rBase * 0.4, trunkH * 0.22, Math.sin(a) * rBase * 0.4, rBase * 0.42, rBase * 0.16, 4));
+  }
+  for (let b = 0; b < boughs; b++) {
+    const a = (b / boughs) * Math.PI * 2 + (rand() - 0.5) * 0.35;
+    const by0 = trunkH * (0.72 + rand() * 0.25);
+    const bx0 = lean * (by0 / trunkH);
+    const bx1 = bx0 + Math.cos(a) * spread * (0.8 + rand() * 0.4);
+    const bz1 = Math.sin(a) * spread * (0.8 + rand() * 0.4);
+    const by1 = trunkH + reach * (0.55 + rand() * 0.45);
+    trunkParts.push(limb(bx0, by0, 0, bx1, by1, bz1, rTop * 0.72, rTop * 0.34, 5));
+    for (let f = 0; f < forks; f++) {
+      const fa = a + (f - (forks - 1) / 2) * 0.85 + (rand() - 0.5) * 0.3;
+      const fx = bx1 + Math.cos(fa) * spread * (0.55 + rand() * 0.4);
+      const fz = bz1 + Math.sin(fa) * spread * (0.55 + rand() * 0.4);
+      const fy = by1 + reach * (0.2 + rand() * 0.45);
+      trunkParts.push(limb(bx1, by1, bz1, fx, fy, fz, rTop * 0.32, rTop * 0.12, 4));
+      for (let c = 0; c < 3; c++) {
+        const ox = (rand() - 0.5) * leafR * 1.4;
+        const oy = (rand() - 0.3) * leafR * 0.9;
+        const oz = (rand() - 0.5) * leafR * 1.4;
+        canopyParts.push(...leafCluster(fx + ox, fy + oy, fz + oz, leafR * (0.8 + rand() * 0.45), rand, flat));
+      }
+    }
+    canopyParts.push(...leafCluster(bx1, by1 + leafR * 0.3, bz1, leafR * 0.9, rand, flat));
+  }
+  return { trunk: () => merge(trunkParts), canopy: () => merge(canopyParts) };
+}
+
+const NEEM_TREE = () => branchTree({ trunkH: 3.1, rBase: 0.42, rTop: 0.22, lean: 0.15, boughs: 5, spread: 2.0, reach: 2.3, forks: 3, seed: 101, roots: 4, flat: 0.75, leafR: 1.05 });
+const ACACIA_TREE = () => branchTree({ trunkH: 3.3, rBase: 0.26, rTop: 0.13, lean: 0.45, boughs: 5, spread: 2.8, reach: 1.15, forks: 3, seed: 202, roots: 3, flat: 0.36, leafR: 1.05 });
+const KHEJRI_TREE = () => branchTree({ trunkH: 2.7, rBase: 0.25, rTop: 0.12, lean: 0.3, boughs: 4, spread: 1.5, reach: 1.3, forks: 2, seed: 303, roots: 3, flat: 0.55, leafR: 0.72 });
+
 export const P = {
-  neemTrunk: () => once('neemTrunk', () => {
-    const t = new THREE.CylinderGeometry(0.22, 0.38, 3.4, 7); t.translate(0, 1.7, 0);
-    const b1 = new THREE.CylinderGeometry(0.1, 0.18, 2.2, 5); b1.rotateZ(0.7); b1.translate(0.7, 3.6, 0);
-    const b2 = new THREE.CylinderGeometry(0.1, 0.18, 2.0, 5); b2.rotateZ(-0.6); b2.translate(-0.6, 3.5, 0.2);
-    return merge([t, b1, b2]);
+  neemTrunk: () => once('neemTrunk', () => NEEM_TREE().trunk()),
+  neemCanopy: () => once('neemCanopy', () => NEEM_TREE().canopy()),
+  acaciaTrunk: () => once('acaciaTrunk', () => ACACIA_TREE().trunk()),
+  acaciaCanopy: () => once('acaciaCanopy', () => ACACIA_TREE().canopy()),
+  tallTrunk: () => once('tallTrunk', () => {
+    const rand = mulberry32(404);
+    const parts = [limb(0, 0, 0, 0.1, 11.2, 0, 0.34, 0.1, 7)];
+    for (let r = 0; r < 4; r++) {
+      const a = (r / 4) * Math.PI * 2;
+      parts.push(limb(Math.cos(a) * 0.55, 0, Math.sin(a) * 0.55, Math.cos(a) * 0.15, 0.7, Math.sin(a) * 0.15, 0.14, 0.06, 4));
+    }
+    for (let i = 0; i < 8; i++) {
+      const y0 = 5.2 + i * 0.72;
+      const a = i * 2.3 + rand() * 0.4;
+      const r = 1.4 - (i / 8) * 0.6;
+      parts.push(limb(0.05, y0, 0, Math.cos(a) * r, y0 + 1.1, Math.sin(a) * r, 0.09, 0.03, 4));
+    }
+    return merge(parts);
   }),
-  neemCanopy: () => once('neemCanopy', () => {
-    const a = blob(2.6, 1, 1, 0.78); a.translate(0, 5.3, 0);
-    const b = blob(1.9, 1, 2, 0.8); b.translate(1.7, 4.6, 0.6);
-    const c = blob(2.0, 1, 3, 0.8); c.translate(-1.5, 4.7, -0.5);
-    const d = blob(1.5, 1, 11, 0.85); d.translate(0.3, 4.4, -1.8);
-    const e = blob(1.4, 1, 12, 0.85); e.translate(-0.6, 6.2, 1.4);
-    return merge([a, b, c, d, e]);
-  }),
-  acaciaTrunk: () => once('acaciaTrunk', () => {
-    const t = new THREE.CylinderGeometry(0.12, 0.22, 3.8, 6); t.rotateZ(0.12); t.translate(0.2, 1.9, 0);
-    const b = new THREE.CylinderGeometry(0.07, 0.12, 2.2, 5); b.rotateZ(-0.8); b.translate(-0.6, 3.8, 0);
-    return merge([t, b]);
-  }),
-  acaciaCanopy: () => once('acaciaCanopy', () => {
-    const a = blob(3.4, 1, 4, 0.32, 0.22); a.translate(0.3, 4.6, 0);
-    const b = blob(2.2, 1, 5, 0.35, 0.2); b.translate(-1.3, 4.3, 0.8);
-    return merge([a, b]);
-  }),
-  tallTrunk: () => once('tallTrunk', () => { const t = new THREE.CylinderGeometry(0.14, 0.3, 11, 6); t.translate(0, 5.5, 0); return t; }),
   tallCanopy: () => once('tallCanopy', () => {
-    const a = blob(1.8, 1, 6, 1.9, 0.3); a.translate(0, 11, 0);
-    const b = blob(1.3, 1, 7, 1.6, 0.3); b.translate(0.7, 8.6, 0.3);
-    return merge([a, b]);
+    const rand = mulberry32(404);
+    const parts = [];
+    for (let i = 0; i < 8; i++) {
+      const y0 = 5.2 + i * 0.72;
+      const a = i * 2.3 + rand() * 0.4;
+      const r = 1.4 - (i / 8) * 0.6;
+      const bx = Math.cos(a) * r, by = y0 + 1.1, bz = Math.sin(a) * r;
+      parts.push(...leafCluster(bx, by, bz, 0.95, rand, 1.15));
+      parts.push(...leafCluster(bx * 0.65, by + 0.45, bz * 0.65, 0.85, rand, 1.15));
+    }
+    parts.push(...leafCluster(0.1, 11.6, 0, 1.0, rand, 1.25));
+    return merge(parts);
   }),
   banyanTrunk: () => once('banyanTrunk', () => {
-    const list = [];
-    const t = new THREE.CylinderGeometry(0.8, 1.3, 4.5, 9); t.translate(0, 2.25, 0); list.push(t);
-    for (let i = 0; i < 6; i++) { const r = new THREE.CylinderGeometry(0.05, 0.08, 5, 4); r.translate(Math.cos(i) * 4.5, 2.5, Math.sin(i) * 4.5); list.push(r); }
+    const rand = mulberry32(505);
+    const list = [limb(0, 0, 0, 0, 4.3, 0, 1.25, 0.78, 9)];
+    for (let r = 0; r < 6; r++) {
+      const a = (r / 6) * Math.PI * 2 + rand() * 0.3;
+      list.push(limb(Math.cos(a) * 1.9, 0, Math.sin(a) * 1.9, Math.cos(a) * 0.7, 1.4, Math.sin(a) * 0.7, 0.42, 0.2, 5));
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + (rand() - 0.5) * 0.25;
+      const bx1 = Math.cos(a) * 4.4, bz1 = Math.sin(a) * 4.4, by1 = 5.4 + rand() * 0.8;
+      list.push(limb(Math.cos(a) * 0.4, 3.8, Math.sin(a) * 0.4, bx1, by1, bz1, 0.42, 0.18, 6));
+      // hanging aerial prop roots reaching the ground
+      for (let p = 0; p < 2; p++) {
+        const t = 0.55 + p * 0.35;
+        const rx = bx1 * t + (rand() - 0.5) * 0.4, rz = bz1 * t + (rand() - 0.5) * 0.4;
+        const ry = 3.8 + (by1 - 3.8) * t;
+        list.push(limb(rx, ry, rz, rx + (rand() - 0.5) * 0.25, 0, rz + (rand() - 0.5) * 0.25, 0.06, 0.09, 4));
+      }
+      for (let f = 0; f < 2; f++) {
+        const fa = a + (f === 0 ? -0.55 : 0.55);
+        list.push(limb(bx1, by1, bz1, bx1 + Math.cos(fa) * 2.1, by1 + 1.1, bz1 + Math.sin(fa) * 2.1, 0.16, 0.07, 4));
+      }
+    }
     return merge(list);
   }),
   banyanCanopy: () => once('banyanCanopy', () => {
+    const rand = mulberry32(506);
     const list = [];
-    const rand = mulberry32(9);
-    for (let i = 0; i < 6; i++) { const b = blob(3.8 + rand() * 1.5, 1, 20 + i, 0.6); b.translate((rand() - 0.5) * 9, 6.2 + rand() * 1.5, (rand() - 0.5) * 9); list.push(b); }
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const bx1 = Math.cos(a) * 4.4, bz1 = Math.sin(a) * 4.4, by1 = 5.8;
+      for (let k = 0; k < 5; k++) {
+        const ox = (rand() - 0.5) * 3.2, oy = (rand() - 0.2) * 1.4, oz = (rand() - 0.5) * 3.2;
+        list.push(...leafCluster(bx1 + ox, by1 + oy, bz1 + oz, 1.55 + rand() * 0.45, rand, 0.62));
+      }
+    }
+    for (let k = 0; k < 8; k++) {
+      list.push(...leafCluster((rand() - 0.5) * 3.8, 6.8 + rand() * 1.2, (rand() - 0.5) * 3.8, 1.6, rand, 0.62));
+    }
     return merge(list);
   }),
-  khejriTrunk: () => once('khejriTrunk', () => { const t = new THREE.CylinderGeometry(0.12, 0.25, 3.2, 6); t.translate(0, 1.6, 0); return t; }),
-  khejriCanopy: () => once('khejriCanopy', () => {
-    const a = blob(1.9, 1, 30, 0.55, 0.45); a.translate(0, 3.8, 0);
-    const b = blob(1.2, 1, 31, 0.6, 0.45); b.translate(1.1, 3.3, 0.4);
-    return merge([a, b]);
-  }),
+  khejriTrunk: () => once('khejriTrunk', () => KHEJRI_TREE().trunk()),
+  khejriCanopy: () => once('khejriCanopy', () => KHEJRI_TREE().canopy()),
   palmTrunk: () => once('palmTrunk', () => {
     const list = [];
-    for (let i = 0; i < 7; i++) {
-      const seg = new THREE.CylinderGeometry(0.17, 0.2, 1.75, 6);
-      seg.rotateZ(-0.05 * i);
-      seg.translate(Math.pow(i / 6, 2) * 1.4, 0.87 + i * 1.72, 0);
-      list.push(seg);
+    const segs = 12;
+    let px = 0, py = 0;
+    for (let i = 0; i < segs; i++) {
+      const t0 = i / segs, t1 = (i + 1) / segs;
+      const nx = Math.pow(t1, 1.8) * 1.55;
+      const ny = t1 * 12.0;
+      const r0 = 0.25 - t0 * 0.09, r1 = 0.23 - t1 * 0.09;
+      list.push(limb(px, py, 0, nx, ny, 0, r0, r1, 7));
+      px = nx; py = ny;
     }
     return merge(list);
   }),
   palmFronds: () => once('palmFronds', () => {
     const list = [];
-    for (let i = 0; i < 10; i++) {
-      const f = new THREE.PlaneGeometry(0.9, 4.2, 1, 6);
-      const p = f.attributes.position;
-      for (let k = 0; k < p.count; k++) {
-        const y = p.getY(k) + 2.1; // 0..4.2 along frond
-        const droop = -Math.pow(y / 4.2, 2) * 2.0;
-        const w = p.getX(k) * (1 - y / 5);
-        p.setXYZ(k, w, droop, y);
+    const topX = 1.55, topY = 12.0;
+    for (let i = 0; i < 12; i++) {
+      const yaw = (i / 12) * Math.PI * 2 + (i % 2) * 0.15;
+      const arch = i % 2 === 0 ? 0.35 : 0.72;
+      const len = 4.0;
+      let rx = 0, ry = 0;
+      for (let s = 0; s < 5; s++) {
+        const t = (s + 1) / 5;
+        const nrx = t * len;
+        const nry = Math.sin(t * Math.PI * 0.65) * 1.15 * arch - Math.pow(t, 2.2) * 2.1;
+        const rib = limb(rx, ry, 0, nrx, nry, 0, 0.045 * (1 - t * 0.7), 0.03 * (1 - t * 0.7), 4);
+        rib.rotateY(yaw); rib.translate(topX, topY, 0); list.push(rib);
+        // pairs of V-angled pinnate leaflets along the rachis
+        for (let k = 0; k < 3; k++) {
+          const lt = (s + (k + 0.5) / 3) / 5;
+          const lx = lt * len;
+          const ly = Math.sin(lt * Math.PI * 0.65) * 1.15 * arch - Math.pow(lt, 2.2) * 2.1;
+          const lw = 0.85 * Math.sin(Math.min(1, lt * 1.1) * Math.PI * 0.85);
+          for (const side of [-1, 1]) {
+            const lf = new THREE.BufferGeometry();
+            lf.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+              0, 0, 0,
+              0.12, -0.14, side * lw * 0.55,
+              0.04, -0.35, side * lw,
+            ]), 3));
+            lf.computeVertexNormals();
+            lf.translate(lx, ly, 0);
+            lf.rotateY(yaw);
+            lf.translate(topX, topY, 0);
+            list.push(lf);
+          }
+        }
+        rx = nrx; ry = nry;
       }
-      f.computeVertexNormals();
-      f.rotateY((i / 10) * Math.PI * 2);
-      f.rotateX(-0.25);
-      f.translate(1.4, 12.2, 0);
-      list.push(f);
     }
-    const nut = new THREE.SphereGeometry(0.45, 6, 5); nut.translate(1.4, 11.7, 0); list.push(nut);
+    for (let c = 0; c < 5; c++) {
+      const a = (c / 5) * Math.PI * 2;
+      const nut = new THREE.SphereGeometry(0.18, 6, 5);
+      nut.translate(topX + Math.cos(a) * 0.25, topY - 0.35, Math.sin(a) * 0.25);
+      list.push(nut);
+    }
     return merge(list);
   }),
   grassTuft: () => once('grassTuft', () => {
@@ -134,7 +277,37 @@ export const P = {
     const c = blob(0.5, 1, 42, 0.75, 0.4); c.translate(-0.5, 0.32, -0.35);
     return merge([a, b, c]);
   }),
-  boulder: () => once('boulder', () => blob(1, 2, 50, 0.85, 0.3, false)), // full height: tors stack these on each other
+  boulder: () => once('boulder', () => {
+    // Craggy cleaved rock boulder: planar fracture cuts + stratified ledges (not a soft sphere)
+    const g = new THREE.IcosahedronGeometry(1.0, 2);
+    const rand = mulberry32(50);
+    const planes = [];
+    for (let i = 0; i < 9; i++) {
+      const th = rand() * Math.PI * 2, ph = Math.acos(rand() * 1.6 - 0.6);
+      planes.push({ nx: Math.sin(ph) * Math.cos(th), ny: Math.cos(ph), nz: Math.sin(ph) * Math.sin(th), d: 0.62 + rand() * 0.28 });
+    }
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      let x = p.getX(i), y = p.getY(i) * 0.82, z = p.getZ(i);
+      for (const pl of planes) {
+        const dot = x * pl.nx + y * pl.ny + z * pl.nz;
+        if (dot > pl.d) {
+          const ex = dot - pl.d;
+          x -= pl.nx * ex * 0.85;
+          y -= pl.ny * ex * 0.85;
+          z -= pl.nz * ex * 0.85;
+        }
+      }
+      // subtle horizontal basalt/granite strata ledge
+      const strata = Math.sin(y * 9.5) * 0.045;
+      p.setXYZ(i, x * (1 + strata), y, z * (1 + strata));
+    }
+    g.deleteAttribute('normal'); g.deleteAttribute('uv');
+    const out = g.toNonIndexed();
+    out.computeVertexNormals(); // crisp faceted rock cleavage planes
+    out.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(out.attributes.position.count * 2), 2));
+    return out;
+  }),
   pole: () => once('pole', () => {
     const p = new THREE.CylinderGeometry(0.07, 0.1, 7, 5); p.translate(0, 3.5, 0);
     const a = new THREE.BoxGeometry(1.4, 0.08, 0.08); a.translate(0, 6.6, 0);

@@ -1534,6 +1534,7 @@ function incident(type, reason, aiTrain = null) {
   state.auto = false; syncAuto();
   $('incident-title').textContent = type === 'derail' ? 'DERAILMENT' : 'COLLISION';
   $('incident-reason').textContent = reason;
+  $('btn-resume').style.display = (mp.room || mp.racing) ? 'none' : '';
   $('incident').style.display = 'flex';
 }
 
@@ -1569,6 +1570,7 @@ function applyIncidentPose(dt) {
 }
 
 function resumeFromLastStation() {
+  if (mp.room || mp.racing) { toast('Resume from last station is disabled in multiplayer', 'warn'); return; }
   const nxt = ops.nextStation(state.sFront);
   const idx = nxt ? Math.max(0, nxt.index - 1) : layout.stations.length - 2;
   const st = layout.stations[idx];
@@ -1796,7 +1798,7 @@ renderer.setAnimationLoop(() => {
       world.update(smScene.sC, f, { budget: 1, terrainBudget: 1 }); // small budget: no frame hitches while streaming
       const { night } = sky.update(state.gameMinutes, state.weather, camera, f, dtF);
       rain.visible = state.weather === 'MONSOON'; if (rain.visible) rain.position.copy(camera.position).add(new THREE.Vector3(0, -12, 0));
-      world.animate(dtF, night, f);
+      world.animate(dtF, night, f, ops);
       if (pipeline && smGfx.fx) pipeline.render(); else renderer.render(scene, camera); // no bloom by default: lighter, smoother
     }
     return;
@@ -1883,7 +1885,7 @@ renderer.setAnimationLoop(() => {
     consist.beam.material.opacity = lightsOn ? Math.min(0.45, night * 0.16 + fogK * (0.06 + night * 0.22)) : 0;
     consist.beam.visible = consist.beam.material.opacity > 0.01 && !['cab', 'crew'].includes(CAMERA_MODES[rig.mode].id);
   }
-  world.animate(dt, night, tmpV);
+  world.animate(dt, night, tmpV, ops);
   if (bloomNode) {
     const fogGlow = state.weather === 'FOG' ? 0.22 : state.weather === 'MONSOON' ? 0.1 : 0;
     bloomNode.strength.value = 0.14 + night * 0.18 + fogGlow;

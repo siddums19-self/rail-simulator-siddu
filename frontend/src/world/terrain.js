@@ -34,12 +34,21 @@ export class PolylineIndex {
 }
 
 function hillShape(B, x, z) {
+  // Domain-warped coordinates so mountain ranges curve naturally instead of forming regular blobs
+  const wx = x + (fbm2(x * 0.0009, z * 0.0009, 2, 13) - 0.5) * 240;
+  const wz = z + (fbm2(x * 0.0009 + 19.3, z * 0.0009 - 7.1, 2, 17) - 0.5) * 240;
   if (B.hillType === 'ridged') {
-    const r = ridged2(x * B.hillScale, z * B.hillScale, 4, 7);
-    return Math.pow(Math.max(0, r - 0.34) / 0.66, 1.55);
+    const rMain = ridged2(wx * B.hillScale, wz * B.hillScale, 5, 7);
+    const rSpur = ridged2(wx * B.hillScale * 2.35, wz * B.hillScale * 2.35, 3, 29);
+    const base = Math.pow(Math.max(0, rMain - 0.3) / 0.7, 1.45);
+    // Subtle Deccan/Western Ghats basalt cliff-terrace steps on steep ridges
+    const terrace = Math.sin(base * 14) * 0.022 * smoothstep(0.25, 0.75, base);
+    return Math.max(0, base * (0.82 + 0.32 * rSpur) + terrace);
   }
-  const f = fbm2(x * B.hillScale, z * B.hillScale, 5, 3);
-  return Math.pow(Math.max(0, f - 0.32) / 0.68, 1.2);
+  const f = fbm2(wx * B.hillScale, wz * B.hillScale, 5, 3);
+  const detail = ridged2(wx * B.hillScale * 2.1, wz * B.hillScale * 2.1, 3, 19);
+  const h = Math.pow(Math.max(0, f - 0.3) / 0.7, 1.25);
+  return h * (0.85 + 0.22 * detail);
 }
 
 export class Terrain {
@@ -111,10 +120,11 @@ export class Terrain {
     let r = B.soil[0] + (B.grass[0] - B.soil[0]) * g;
     let gg = B.soil[1] + (B.grass[1] - B.soil[1]) * g;
     let b = B.soil[2] + (B.grass[2] - B.soil[2]) * g;
-    const rock = smoothstep(0.35, 0.75, slope) + smoothstep(0.55, 1, info.t) * 0.25 * (B.hillType === 'ridged' ? 1 : 0);
-    r += (B.rock[0] - r) * Math.min(1, rock);
-    gg += (B.rock[1] - gg) * Math.min(1, rock);
-    b += (B.rock[2] - b) * Math.min(1, rock);
+    const rock = smoothstep(0.26, 0.68, slope) + smoothstep(0.45, 0.95, info.t) * 0.35 * (B.hillType === 'ridged' ? 1 : 0.45);
+    const scree = (fbm2(x / 18, z / 18, 2, 31) - 0.5) * 0.12 * Math.min(1, rock);
+    r += (B.rock[0] - r) * Math.min(1, rock) + scree;
+    gg += (B.rock[1] - gg) * Math.min(1, rock) + scree;
+    b += (B.rock[2] - b) * Math.min(1, rock) + scree;
     // patches of black cotton soil (Deccan) / darker earth elsewhere
     const patch = smoothstep(0.63, 0.74, fbm2(x / 260, z / 260, 3, 23)) * 0.55;
     const ps = B.blackSoil || [B.soil[0] * 0.7, B.soil[1] * 0.7, B.soil[2] * 0.7];

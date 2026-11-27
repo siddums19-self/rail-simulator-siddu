@@ -384,7 +384,29 @@ export function buildCoach(kind, code = 'B1', opts = {}) {
     const eq = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.5, 1.6), DARK()); eq.position.set(0, 0.75, z); v.group.add(eq);
   }
   // roof: AC units (LHB/VB) or ventilators (ICF/DEMU)
-  if (geo === 'LHB' || geo === 'VB' || v.ac) {
+  if (geo === 'VB') {
+    const whiteShroud = std(0xf4f6f8, 0.28, 0.2);
+    const grille = std(0x2a3038, 0.7, 0.3);
+    if (opts.noseFront) {
+      // Prominent white box-type aerodynamic roof equipment housing behind the VB cab
+      const box = new THREE.Mesh(new THREE.BoxGeometry(2.15, 0.48, 4.4), whiteShroud);
+      box.position.set(0, 4.18, -L / 2 + 7.6);
+      box.castShadow = true;
+      v.group.add(box);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.14, 4.65), whiteShroud);
+      cap.position.set(0, 4.44, -L / 2 + 7.6);
+      v.group.add(cap);
+      for (const s of [-1, 1]) {
+        const vent = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.28, 3.2), grille);
+        vent.position.set(s * 1.08, 4.18, -L / 2 + 7.6);
+        v.group.add(vent);
+      }
+    }
+    for (const z of opts.noseFront ? [L / 2 - 3.0] : [-L / 2 + 2.8, L / 2 - 2.8]) {
+      const ac = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.36, 3.1), whiteShroud);
+      ac.position.set(0, 4.12, z); ac.castShadow = true; v.group.add(ac);
+    }
+  } else if (geo === 'LHB' || v.ac) {
     for (const z of [-L / 2 + 2.4, L / 2 - 2.4]) {
       const ac = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.32, 2.8), std(0x9aa0a6, 0.6, 0.4));
       ac.position.set(0, 4.1, z); v.group.add(ac);

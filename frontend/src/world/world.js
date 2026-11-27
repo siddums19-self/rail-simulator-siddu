@@ -22,7 +22,7 @@ import { TurnoutManager } from './turnouts.js';
 import { buildJunctionSplits } from './junctionSplits.js';
 import { buildGodavariBridges } from './godavariBridge.js';
 import { buildKrishnaBridges } from './krishnaBridge.js';
-import { buildDudhsagar } from './dudhsagar.js';
+import { buildDudhsagarViaduct } from './dudhsagar.js';
 import { M } from '../core/materials.js';
 
 const constLanes = new Map();
@@ -69,6 +69,7 @@ export class World {
     this.water.build(this.root);
     if (layout.godavari) buildGodavariBridges(this.root, layout);
     if (layout.krishna) buildKrishnaBridges(this.root, layout);
+    if (layout.dudhsagar) this.dudhsagarAnim = buildDudhsagarViaduct(this.root, layout);
     this.props = new PropBuilder({
       layout, terrain: this.terrain, seedKey, density,
       exclusion: (x, z) => !!((this.scIndex && this.scIndex.distance(x, z, 60) < 16) || (this.airportPlan && Math.hypot(x - this.airportPlan.x, z - this.airportPlan.z) < 880) || (this.gtl && this.gtl.exclusion(x, z)) || (this.gtlW && this.gtlW.exclusion(x, z)) || this.water.contains(x, z)),
@@ -221,7 +222,8 @@ export class World {
     const ra = Math.max(a, this.layout.trackMin ?? 0), rb = Math.min(b, this.layout.trackMax ?? this.layout.total);
     if (rb > ra) buildOHE(group, this.layout.path, this.layout, ra, rb, segs, { skipMast: gtl ? gtl.skipMast : null });
     const inBridge = (s) => (this.layout.godavari && s > this.layout.godavari.s0 - 5 && s < this.layout.godavari.s1 + 5)
-      || (this.layout.krishna && s > this.layout.krishna.s0 - 5 && s < this.layout.krishna.s1 + 5);
+      || (this.layout.krishna && s > this.layout.krishna.s0 - 5 && s < this.layout.krishna.s1 + 5)
+      || (this.layout.dudhsagar && s > this.layout.dudhsagar.sMid - this.layout.dudhsagar.riverWidth / 2 - 20 && s < this.layout.dudhsagar.sMid + this.layout.dudhsagar.riverWidth / 2 + 20);
     if (rb > ra) buildFormation(group, this.layout.path, this.layout, ra, rb, {
       skipPier: gtl ? gtl.skipPier : null, walled: inGtl,
       // Guntakal flyover: a walled (retaining-wall) embankment, with a bridge only over the Bellary line;
@@ -323,7 +325,6 @@ export class World {
     }
     this._decorTracks(st, res.root);
     buildJunctionSplits(st, L, res.root, this.terrain.extra);
-    buildDudhsagar(st, L, res.root);
     decorateStation(this.festival, st, L, res);
     this.root.add(res.root);
     return { ...res, signals, lights };
@@ -406,9 +407,11 @@ export class World {
     return bell;
   }
 
-  animate(dt, night, focusPos) {
+  animate(dt, night, focusPos, ops = null) {
     if (this.gtl && this.gtl.animate) this.gtl.animate(dt, night);
+    if (this.dudhsagarAnim) this.dudhsagarAnim.animate(dt);
     for (const p of this.people) {
+      if (p.role === 'sm' && ops && p.st) p.green = ops.starterAspect(p.st) !== 'RED';
       if (p.mesh.parent && p.mesh.getWorldPosition(_tmp).distanceToSquared(focusPos) < 450 * 450) animatePerson(p, dt);
     }
     for (const r of this.rotors) r.obj.rotation.z += dt * r.speed;

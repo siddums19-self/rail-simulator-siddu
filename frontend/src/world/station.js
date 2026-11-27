@@ -491,6 +491,19 @@ export function buildStation(st, layout, { seedKey, density = 1, people = [] }) 
       anim.push({ mesh: m, walker, speed: range(rand, 0.8, 1.4), dir: rand() < 0.5 ? 1 : -1, t: z, min: -pLen * 0.33, max: pLen * 0.33, phase: rand() * 6, baseRot: rand() * 6.28 });
     }
   }
+  // Station Master standing on the main platform near the forward starter end, waving red/green flag
+  {
+    const cx = (pf1.l0 + pf1.l1) / 2;
+    const edgeDir = bs < 0 ? 1 : -1;
+    const smX = cx + edgeDir * Math.max(0.8, (pf1.l1 - pf1.l0) * 0.5 - 1.4);
+    const smZ = pLen * 0.18;
+    const sm = createPerson(st.index * 997 + 7, 'station_master');
+    sm.position.set(smX, pfTop, smZ);
+    const baseRot = edgeDir > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+    sm.rotation.y = baseRot;
+    local.add(sm);
+    anim.push({ mesh: sm, walker: false, role: 'sm', st, green: false, phase: 0, baseRot });
+  }
   people.push(...anim);
 
   // ---------------------------------------------------------- selling points on the platforms (busier stations get more)
