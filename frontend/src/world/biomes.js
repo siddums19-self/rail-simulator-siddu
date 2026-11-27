@@ -50,6 +50,11 @@ export const BIOMES = {
     ...base, soil: [0.42, 0.35, 0.24], grass: [0.33, 0.56, 0.22], hill: 4, hillType: 'fbm', boulder: 0, grassiness: 0.9,
     trees: { neem: 5, acacia: 1, palm: 26, tall: 2, banyan: 0.8, khejri: 0 }, village: 0.45, fields: ['paddy', 'paddy'], fieldCount: 6
   },
+  KONKAN_COAST: {
+    ...base, soil: [0.56, 0.24, 0.14], grass: [0.18, 0.46, 0.15], rock: [0.38, 0.28, 0.22], cess: [0.36, 0.22, 0.16],
+    hill: 190, hillScale: 1 / 1100, hillType: 'fbm', boulder: 2, bush: 90, grassiness: 0.92,
+    trees: { neem: 16, acacia: 1, palm: 24, tall: 14, banyan: 1.5, khejri: 0 }, village: 0.35, fields: ['paddy', 'paddy'], fieldCount: 4
+  },
   NALLAMALA_COASTAL: {
     ...base, soil: [0.45, 0.32, 0.22], grass: [0.30, 0.44, 0.20], rock: [0.45, 0.42, 0.38],
     hill: 170, hillScale: 1 / 1000, hillType: 'fbm', boulder: 2, bush: 80, grassiness: 0.8,

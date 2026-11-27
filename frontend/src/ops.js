@@ -9,6 +9,7 @@ import { playerMain, isDiverging, addTrackEntry, addTrackExit, gtlLadder } from 
 // aspects from block occupancy, speed limits, dwell, derailment, Kavach (ATP).
 
 const RAKE_KEYS = TRAFFIC_MIX;
+const HYD_MMTS = new Set(['LPI', 'HFZ', 'BMT', 'SC', 'JOO', 'HYB', 'KCG', 'STPD', 'MLY', 'BMO']);
 export const PRIORITY = { VANDE_BHARAT: 5, VANDE_BHARAT_ORANGE: 5, RAJDHANI: 5, DURANTO: 5, GARIB_RATH: 4, LHB: 4, JAN_SHATABDI: 3, ICF: 3, ICF_CREAM: 3, MUMBAI_LOCAL: 2, MMTS_LOCAL: 2, DEMU_PASSENGER: 2, BOXN_GOODS: 1 };
 const TRAIN_NO = { VANDE_BHARAT: '20703', VANDE_BHARAT_ORANGE: '20707', RAJDHANI: '22691', DURANTO: '12245', GARIB_RATH: '12735', JAN_SHATABDI: '12069', ICF_CREAM: '17603', LHB: '12797', ICF: '17225', DEMU_PASSENGER: '77414', MUMBAI_LOCAL: '95101', MMTS_LOCAL: '47151', BOXN_GOODS: 'GOODS' };
 const playerMainOf = (line) => playerMain(line);
@@ -743,7 +744,8 @@ export class Traffic {
     if (st.terminal && st.isDest) return false; // the far end is the buffer stops
     // it comes in from the far end, travelling against our direction
     const ctx = st.gapOut ? { s: L.zoneEnd + 100, dir: -1 } : { st };
-    const rake = this.ops.namer.pickRake(TRAFFIC_MIX, this.rand, ctx);
+    const isHydMmts = HYD_MMTS.has(st.code) && this.rand() < 0.65;
+    const rake = isHydMmts ? 'MMTS_LOCAL' : this.ops.namer.pickRake(TRAFFIC_MIX, this.rand, ctx);
     const carLen = rake === 'ICF' || rake === 'DEMU_PASSENGER' ? 22 : 24;
     const cars = Math.max(4, Math.min(rake === 'DEMU_PASSENGER' ? 8 : 14, Math.floor((L.pLen - 55) / carLen)));
     const consist = this.makeConsist(rake, cars);
@@ -816,7 +818,8 @@ export class Traffic {
       // Express/passenger trains (LHB, Rajdhani, etc.) are never held behind a goods train
       if (goods && myP >= 3) { b.state = 'cleared'; continue; }
       const bctx = { s: L.zoneEnd + 100, dir: 1 }; // it leaves ahead of us
-      const rake = goods ? 'BOXN_GOODS' : ops.namer.pickRake(['LHB', 'ICF', 'ICF', 'DEMU_PASSENGER', 'LHB'], this.rand, bctx);
+      const hydPref = HYD_MMTS.has(st.code) && this.rand() < 0.45;
+      const rake = goods ? 'BOXN_GOODS' : hydPref ? 'MMTS_LOCAL' : ops.namer.pickRake(['LHB', 'ICF', 'ICF', 'DEMU_PASSENGER', 'LHB'], this.rand, bctx);
       const carLen = goods ? 10.7 : rake === 'ICF' || rake === 'DEMU_PASSENGER' ? 22 : 24;
       const cars = Math.max(4, Math.min(goods ? 40 : rake === 'DEMU_PASSENGER' ? 8 : 16, Math.floor((L.pLen - 60) / carLen)));
       const consist = this.makeConsist(rake, cars);
@@ -904,7 +907,8 @@ export class Traffic {
       const room = lastSt.terminal ? lastSt.layout.zoneStart - 200 : L.total - 400; // trains leaving a terminus start in its platforms, not beyond them
       if (s0 < room && L.lineAt(s0) === 'D' && L.lineAt(sFront + 300) === 'D') {
         const ctx = { s: s0, dir: -1 };
-        const rake = this.rand() < 0.2 ? 'BOXN_GOODS' : this.ops.namer.pickRake(TRAFFIC_MIX, this.rand, ctx);
+        const nearHyd = L.stations.some((x) => HYD_MMTS.has(x.code) && Math.abs(x.layout.sCenter - s0) < 9000);
+        const rake = (nearHyd && this.rand() < 0.55) ? 'MMTS_LOCAL' : this.rand() < 0.2 ? 'BOXN_GOODS' : this.ops.namer.pickRake(TRAFFIC_MIX, this.rand, ctx);
         const consist = this.makeConsist(rake, rake === 'BOXN_GOODS' ? 22 : 9);
         this.scene.add(consist.group);
         const lane = this._opposingLane();

@@ -93,13 +93,16 @@ export function buildGodavariBridges(root, layout) {
     }
   }
 
-  // ---- 1. LEFT BRIDGE (-35 m): Godavari Bowstring Arch Bridge
+  const archLat = g.dir > 0 ? -g.halfSep : g.halfSep;
+  const trussLat = -archLat;
+
+  // ---- 1. ARCH BRIDGE (left when RJY -> VSKP, right when VSKP -> RJY): Godavari Bowstring Arch Bridge
   const archH = 14.5;
   const archSegs = 12;
   for (let i = 0; i < nSpans; i++) {
     const sa = sBridge0 + i * actualSpan;
     for (const side of [-1, 1]) {
-      const lat = -g.halfSep + side * 3.15;
+      const lat = archLat + side * 3.15;
       // Parabolic arch rib segments
       for (let k = 0; k < archSegs; k++) {
         const t0 = k / archSegs, t1 = (k + 1) / archSegs;
@@ -131,19 +134,19 @@ export function buildGodavariBridges(root, layout) {
       const t = k / archSegs;
       const sk = sa + t * actualSpan;
       const yTop = path.yAt(sk) + archH * 4 * t * (1 - t) + 0.5;
-      path.pointAt(sk, -g.halfSep, v);
+      path.pointAt(sk, archLat, v);
       bat.box(archMat, v.x, yTop, v.z, 6.4, 0.45, 0.45, -path.headingAt(sk), false);
     }
   }
 
-  // ---- 2. RIGHT BRIDGE (+35 m): Godavari Steel Through-Truss Bridge
+  // ---- 2. TRUSS BRIDGE (right when RJY -> VSKP, left when VSKP -> RJY): Godavari Steel Through-Truss Bridge
   const trussH = 10.5;
   const bays = 10;
   const bayLen = actualSpan / bays;
   for (let i = 0; i < nSpans; i++) {
     const sa = sBridge0 + i * actualSpan;
     for (const side of [-1, 1]) {
-      const lat = g.halfSep + side * 3.45;
+      const lat = trussLat + side * 3.45;
       // Top & bottom chords
       const smid = sa + actualSpan / 2;
       const yMid = path.yAt(smid);
@@ -171,7 +174,7 @@ export function buildGodavariBridges(root, layout) {
     for (let k = 0; k <= bays; k += 2) {
       const sk = sa + k * bayLen;
       const yk = path.yAt(sk);
-      path.pointAt(sk, g.halfSep, v);
+      path.pointAt(sk, trussLat, v);
       bat.box(trussMat, v.x, yk + trussH, v.z, 7.0, 0.38, 0.38, -path.headingAt(sk), false);
     }
   }

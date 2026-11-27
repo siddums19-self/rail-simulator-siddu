@@ -22,6 +22,7 @@ import { TurnoutManager } from './turnouts.js';
 import { buildJunctionSplits } from './junctionSplits.js';
 import { buildGodavariBridges } from './godavariBridge.js';
 import { buildKrishnaBridges } from './krishnaBridge.js';
+import { buildDudhsagar } from './dudhsagar.js';
 import { M } from '../core/materials.js';
 
 const constLanes = new Map();
@@ -322,6 +323,7 @@ export class World {
     }
     this._decorTracks(st, res.root);
     buildJunctionSplits(st, L, res.root, this.terrain.extra);
+    buildDudhsagar(st, L, res.root);
     decorateStation(this.festival, st, L, res);
     this.root.add(res.root);
     return { ...res, signals, lights };

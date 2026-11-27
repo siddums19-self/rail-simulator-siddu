@@ -32,7 +32,8 @@ export const OFFLINE_HUBS = [{"code":"ATP","name":"Anantapur","platforms":3,"man
   {"code":"KZJ","name":"Kazipet Jn","platforms":4,"mandatoryReversal":false},
   {"code":"WL","name":"Warangal","platforms":3,"mandatoryReversal":false},
   {"code":"NGP","name":"Nagpur Jn","platforms":8,"mandatoryReversal":false},
-  {"code":"RJY","name":"Rajahmundry","platforms":5,"mandatoryReversal":false}];
+  {"code":"RJY","name":"Rajahmundry","platforms":5,"mandatoryReversal":false},
+  {"code":"MAQ","name":"Mangalore Jn","platforms":6,"mandatoryReversal":false}];
 
 export const OFFLINE_EDGES = [{"edgeId":"WADI_TO_KYN","fromHub":"WADI","toHub":"KYN","distanceKm":551,"trackType":"DOUBLE_LINE_GHAT","biome":"WESTERN_GHATS_URBAN","stationsCsv":"WADI,KLBG,SUR,MO*,KWV,DD,PUNE,LNL,KJT*,KYN"},
   {"edgeId":"KYN_TO_CSMT","fromHub":"KYN","toHub":"CSMT","distanceKm":54,"trackType":"DOUBLE_LINE","biome":"URBAN_SUBURBAN","stationsCsv":"KYN,TNA,DR,CSMT"},
@@ -48,7 +49,7 @@ export const OFFLINE_EDGES = [{"edgeId":"WADI_TO_KYN","fromHub":"WADI","toHub":"
   {"edgeId":"SBC_TO_ATP","fromHub":"SBC","toHub":"ATP","distanceKm":213,"trackType":"DOUBLE_LINE","biome":"DECCAN_PLATEAU","stationsCsv":"SBC,YNK,GBD*,HUP,PKD*,SSPN,DMM,ATP"},
   {"edgeId":"ATP_TO_GTL","fromHub":"ATP","toHub":"GTL","distanceKm":67,"trackType":"DOUBLE_LINE","biome":"DECCAN_PLATEAU","stationsCsv":"ATP,GY*,GTL"},
   {"edgeId":"GTL_TO_DHNE_FLYOVER","fromHub":"GTL","toHub":"DHNE","distanceKm":69,"trackType":"SINGLE_LINE_WITH_LOOPS","biome":"DECCAN_PLATEAU","stationsCsv":"GTL,MKR*,TGL*,EDD*,PDL*,LMD*,MYL*,DHNE"},
-  {"edgeId":"WADI_TO_SC","fromHub":"WADI","toHub":"SC","distanceKm":184,"trackType":"DOUBLE_LINE","biome":"DECCAN_PLATEAU","stationsCsv":"WADI,SEM*,TDU*,VKB,LPI*,SC"},
+  {"edgeId":"WADI_TO_SC","fromHub":"WADI","toHub":"SC","distanceKm":184,"trackType":"DOUBLE_LINE","biome":"DECCAN_PLATEAU","stationsCsv":"WADI,SEM*,TDU*,VKB,LPI*,HFZ*,BMT*,SC"},
   {"edgeId":"SC_TO_KZJ","fromHub":"SC","toHub":"KZJ","distanceKm":132,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"DECCAN_PLATEAU","stationsCsv":"SC,BG*,JN*,KZJ"},
   {"edgeId":"KZJ_TO_NGP","fromHub":"KZJ","toHub":"NGP","distanceKm":448,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"CENTRAL_NORTH_PLAINS","stationsCsv":"KZJ,RDM,MCI*,BPQ,SEGM*,NGP"},
   {"edgeId":"NGP_TO_NDLS","fromHub":"NGP","toHub":"NDLS","distanceKm":1087,"trackType":"DOUBLE_LINE_HIGH_SPEED","biome":"CENTRAL_NORTH_PLAINS","stationsCsv":"NGP,BZU*,ET,BPL,BINA,LAR*,VGLJ,GWL,AGC,MTJ,FDB*,NZM,NDLS"},
@@ -73,7 +74,8 @@ export const OFFLINE_EDGES = [{"edgeId":"WADI_TO_KYN","fromHub":"WADI","toHub":"
   {"edgeId":"RC_TO_GWD","fromHub":"RC","toHub":"GWD","distanceKm":57,"trackType":"SINGLE_LINE_WITH_LOOPS","biome":"DECCAN_PLATEAU","stationsCsv":"RC,CDBH*,PASR*,PJPR*,GWD"},
   {"edgeId":"DHNE_TO_KRNT","fromHub":"DHNE","toHub":"KRNT","distanceKm":54,"trackType":"SINGLE_LINE_WITH_LOOPS","biome":"DECCAN_PLATEAU","stationsCsv":"DHNE,BVO*,VDI*,UKD*,DUU*,KRNT"},
   {"edgeId":"KRNT_TO_GWD","fromHub":"KRNT","toHub":"GWD","distanceKm":56,"trackType":"SINGLE_LINE_WITH_LOOPS","biome":"DECCAN_PLATEAU","stationsCsv":"KRNT,SBBJ*,GWD"},
-  {"edgeId":"GWD_TO_SC","fromHub":"GWD","toHub":"SC","distanceKm":187,"trackType":"SINGLE_LINE_WITH_LOOPS","biome":"DECCAN_PLATEAU","stationsCsv":"GWD,WPR,MBNR,JCL*,SHNR,UR*,KCG,SC"},
+  {"edgeId":"GWD_TO_SC","fromHub":"GWD","toHub":"SC","distanceKm":187,"trackType":"SINGLE_LINE_WITH_LOOPS","biome":"DECCAN_PLATEAU","stationsCsv":"GWD,WPR,MBNR,JCL*,SHNR,UR*,KCG,STPD*,MLY*,SC"},
   {"edgeId":"ATP_TO_GTL_DIRECT","fromHub":"ATP","toHub":"GTL","distanceKm":69,"trackType":"DOUBLE_LINE","biome":"DECCAN_PLATEAU","stationsCsv":"ATP,KLU*,GTL"},
   {"edgeId":"SC_TO_NZB","fromHub":"SC","toHub":"NZB","distanceKm":168,"trackType":"DOUBLE_LINE","biome":"DECCAN_PLATEAU","stationsCsv":"SC,BMO*,MED,KMC,NZB"},
-  {"edgeId":"SC_TO_HYB","fromHub":"SC","toHub":"HYB","distanceKm":9,"trackType":"DOUBLE_LINE","biome":"URBAN_SUBURBAN","stationsCsv":"SC,HYB"}];
+  {"edgeId":"SC_TO_HYB","fromHub":"SC","toHub":"HYB","distanceKm":9,"trackType":"DOUBLE_LINE","biome":"URBAN_SUBURBAN","stationsCsv":"SC,JOO*,HYB"},
+  {"edgeId":"MAQ_TO_VSG","fromHub":"MAQ","toHub":"VSG","distanceKm":448,"trackType":"DOUBLE_LINE","biome":"KONKAN_COAST","stationsCsv":"MAQ,SL*,UD*,KUDA*,BTJL*,MRDW*,HNA*,KT*,GOK*,KAWR*,MAO*,VSG"}];

@@ -129,6 +129,16 @@ export function addCabInterior(v, { floorY = 1.85, inset = 0.2, halfW = 1.38 } =
   box(g, dark, 0, floorY + 0.38, z0 + 0.42, halfW * 2 - 0.1, 0.76, 0.66);
   const gp = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 0.42), new THREE.MeshStandardMaterial({ map: deskTexture(), roughness: 0.6 }));
   gp.position.set(-0.05, floorY + 0.9, z0 + 0.33); gp.rotation.x = -0.75; g.add(gp);
+  // Live gauge needles (speedometer, brake pipe pressure, traction ammeter)
+  const makeNeedle = (x, col = 0xff3b30) => {
+    const piv = new THREE.Group();
+    piv.position.set(x, floorY + 0.91, z0 + 0.34);
+    piv.rotation.x = -0.75;
+    box(piv, mat(col, 0.3, 0.2, { emissive: col, emissiveIntensity: 0.5 }), 0, 0.045, 0.01, 0.012, 0.09, 0.008);
+    g.add(piv);
+    return piv;
+  };
+  v.cabGauges = { speed: makeNeedle(-0.82, 0xff3b30), bp: makeNeedle(-0.46, 0x38bdf8), amps: makeNeedle(-0.12, 0x22c55e) };
   box(g, dark, 0, floorY + 0.79, z0 + 0.62, halfW * 2 - 0.1, 0.05, 0.36);
   // master controller, reverser, automatic and independent brake handles
   const lever = (x, col, len = 0.22) => { const h = box(g, mat(col, 0.4, 0.4), x, floorY + 0.92, z0 + 0.66, 0.04, len, 0.04); h.rotation.x = 0.4; return h; };
@@ -237,6 +247,11 @@ export function animateCrew(lead, tail, t, { throttle = 0, brake = 0, speed = 0 
     if (lead.cabControls) {
       lead.cabControls.throttle.rotation.x = 0.4 - throttle * 0.9;
       lead.cabControls.brakeA.rotation.x = 0.4 - brake * 0.9;
+    }
+    if (lead.cabGauges) {
+      lead.cabGauges.speed.rotation.z = 2.0 - Math.min(1, speed / 45) * 4.0;
+      lead.cabGauges.bp.rotation.z = 1.6 - brake * 3.0;
+      lead.cabGauges.amps.rotation.z = 1.8 - Math.min(1, Math.abs(throttle)) * 3.6;
     }
   }
   if (tail && tail.guard) {

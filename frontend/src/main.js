@@ -158,7 +158,7 @@ const state = {
   auto: false, simRate: 2, kavach: true, incident: null, busyStations: true,
   weather: 'CLEAR', gameMinutes: 7 * 60 + 15, lights: 'auto', wipers: 'auto', derailments: false, scale: Number(localStorageGet('railsim.scale') || 1),
   backendOnline: false, panto: true, brakeEff: 0, incidentsOn: true,
-  paused: false, priorityReqStation: -1, reverseMode: false
+  paused: false, priorityReqStation: -1, reverseMode: false, cruiseSpeed: null
 };
 let layout = null, world = null, consist = null, ops = null, traffic = null, timetable = null, scorer = null, incidents = null, weatherOps = null, control = null;
 const stationAudio = new StationAudio(audio);
@@ -263,8 +263,9 @@ async function solveRoute(src, dst, via, allStops) {
 // ======================================================================
 // cont: continue the same journey after reversing at `src` (same platform, same loco, score, clock,
 // career run; the timetable carries on from the booked departure there).
-async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = false, minutes = null, stops = null, cont = null, trainNo = null, trainName = null, fixedPlan = null, sub = null, nightMail = null }) {
+async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = false, minutes = null, stops = null, cont = null, trainNo = null, trainName = null, fixedPlan = null, sub = null, nightMail = null, loco = null, weather = null, startDelayMin = 0, cars = null }) {
   if (nightMail !== null) state.nightMail = nightMail;
+  if (weather) { state.weather = weather; if ($('sel-weather')) $('sel-weather').value = weather; }
   if (state.nightMail && !cont && minutes === null) minutes = 23 * 60 + 30;
   if (busy) return;
   busy = true;
@@ -329,7 +330,7 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
   if (world.festival && !cont) setTimeout(() => toast(`${FESTIVAL_LABEL[world.festival]} on the railway today!`, 'ok', 3500), 2500);
   ops.pointsMoving = (st) => world.pointsMovingAt(st);
   tm.push(performance.now());
-  if (!cont) consist = new Consist(rakeType, { isPlayer: true, ...(goods ? { cars: RAKES[rakeType].wagons, loco: 'WAG9' } : {}) });
+  if (!cont) consist = new Consist(rakeType, { isPlayer: true, ...(cars ? { cars } : {}), ...(loco ? { loco } : goods ? { cars: cars || RAKES[rakeType].wagons, loco: 'WAG9' } : {}) });
   if (cont) { // the train stands on the same platform it came in on
     const o = layout.stations[0];
     const t = o.layout.tracks.find((tr) => tr.pf && tr.pf === cont.pf);
@@ -347,6 +348,7 @@ async function startRoute({ src, dst, via = [], rakeType = 'LHB', allStops = fal
   const cautions = weatherOps.setWeather(state.weather, origin0(layout));
   if (cont && timetable) state.prevLegs.push({ rows: timetable.rows, actual: timetable.actual });
   timetable = new Timetable(layout, ops, rakeType, cont ? cont.bookedDep - 2 : state.gameMinutes);
+  if (startDelayMin > 0) timetable.shift(-startDelayMin);
   ops.busyEnabled = state.busyStations;
   stationAudio.reset();
   traffic.onStationEvent = (type, t) => stationAudio.trainEvent(type, t, state.gameMinutes);
@@ -481,6 +483,7 @@ function updatePlatformPanel() {
   if (key === pfShownFor) return;
   pfShownFor = key;
   $('pf-title').textContent = `${st.name} — choose line`;
+  if ($('pf-selected')) $('pf-selected').textContent = `Selected: ${ops.trackOf(st).name}${locked ? ' (locked)' : ''}`;
   const freePf = ops.freeTracks(st).filter((t) => t.pf).map((t) => t.pf);
   const note = st.precedence && st.precedence.state !== 'cleared' ? ` · PRECEDENCE for ${st.precedence.train.name}` : st.busy && st.busy.state !== 'cleared' && ops.busyEnabled ? ' · station busy' : '';
   $('pf-sub').textContent = `${st.layout.N} platforms · ${st.layout.tracks.length} lines · free PF: ${freePf.length ? freePf.join(', ') : 'none'} · ${st.halt ? `halt ${st.dwellMin} min` : 'run-through'}${note}`;
@@ -536,9 +539,10 @@ function notch(d) {
     state.auto = false; syncAuto();
     return;
   }
-  const lo = RAKES[state.rakeType].dynBrake ? -4 : 0;
+  const lo = -4; // DB1..DB4 dynamic/regenerative brake available on all trains while moving forward
   state.notch = Math.max(lo, Math.min(8, state.notch + d));
   if (d > 0 && state.notch > 0) { state.brake = 0; state.emergency = false; }
+  state.cruiseSpeed = null; $('btn-cruise')?.classList.remove('on');
   state.auto = false; syncAuto();
 }
 function brake(d) { state.brake = Math.max(0, Math.min(100, state.brake + d)); if (d > 0 && state.notch > 0) state.notch = 0; state.auto = false; syncAuto(); }
@@ -561,6 +565,11 @@ async function unlockAudio() { try { await audio.init(); } catch (e) { console.w
 
 $('btn-up').onclick = () => notch(1);
 $('btn-dn').onclick = () => notch(-1);
+if ($('btn-cruise')) $('btn-cruise').onclick = () => {
+  if (state.cruiseSpeed !== null) { state.cruiseSpeed = null; $('btn-cruise').classList.remove('on'); toast('Cruise speed hold OFF', '', 1600); }
+  else if (state.speed < 1) { toast('Accelerate first before engaging Cruise Hold', 'warn', 2000); }
+  else { state.cruiseSpeed = state.speed; state.auto = false; syncAuto(); $('btn-cruise').classList.add('on'); toast(`Cruise Hold ON at ${Math.round(state.speed * 3.6)} km/h`, 'ok', 2200); }
+};
 $('btn-brk').onclick = () => brake(25);
 $('btn-rel').onclick = () => { state.brake = 0; state.emergency = false; };
 $('btn-emg').onclick = () => { state.emergency = true; state.notch = 0; state.brake = 100; state.auto = false; syncAuto(); };
@@ -640,6 +649,20 @@ bindMinimize('min-left', 'left-panel');
 bindMinimize('min-right', 'right-panel');
 bindMinimize('min-speedo', 'speedo');
 bindMinimize('min-cam', 'campad');
+bindMinimize('min-pf', 'pf-panel');
+
+// Live Train Radar toggle
+state.radarOn = false;
+if ($('btn-radar')) $('btn-radar').onclick = (e) => {
+  state.radarOn = !state.radarOn;
+  e.target.classList.toggle('on', state.radarOn);
+  $('radar-panel').style.display = state.radarOn ? 'block' : 'none';
+};
+if ($('radar-close')) $('radar-close').onclick = () => {
+  state.radarOn = false;
+  $('btn-radar')?.classList.remove('on');
+  $('radar-panel').style.display = 'none';
+};
 
 // Strip map scroll arrows
 if ($('strip-left')) $('strip-left').onclick = () => { $('strip-viewport')?.scrollBy({ left: -180, behavior: 'smooth' }); };
@@ -971,6 +994,30 @@ function renderGuide() {
   document.querySelectorAll('#guide-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.gcat === guideCat));
 }
 $('tile-guide').onclick = () => { renderGuide(); $('guide-modal').style.display = 'flex'; };
+
+// ---- Scenarios & Missions
+const SCENARIOS = [
+  { title: '⏱ Late Rajdhani Recovery', desc: 'Secunderabad → Nagpur (Rajdhani) · Start 35 min late. Use Ask Priority & high-speed LHB running to recover time.', opts: { src: 'SC', dst: 'NGP', rakeType: 'RAJDHANI', weather: 'CLEAR', minutes: 10 * 60, startDelayMin: 35 } },
+  { title: '🪨 Heavy BOXN Coal Climb', desc: 'Guntakal → Dhone (58-wagon BOXN Goods, WAG-12B) · Summer haze on single line with crossing loops.', opts: { src: 'GTL', dst: 'DHNE', rakeType: 'BOXN_GOODS', loco: 'WAG12', weather: 'HAZE', minutes: 15 * 60 } },
+  { title: '🌉 Godavari & Krishna Twin-Bridge Express', desc: 'Vijayawada → Visakhapatnam (WAP-7 LHB) · Golden-hour run across the twin Godavari bridges after Rajahmundry.', opts: { src: 'BZA', dst: 'VSKP', rakeType: 'LHB', weather: 'CLEAR', minutes: 17 * 60 + 15 } },
+  { title: '🌧 Monsoon Western Ghats Night Mail', desc: 'Wadi → Kalyan (ICF Express) · 23:30 Monsoon night mail through heavy rain, lightning & ghats.', opts: { src: 'WADI', dst: 'KYN', rakeType: 'ICF', weather: 'MONSOON', nightMail: true, minutes: 23 * 60 + 30 } }
+];
+if ($('tile-scenarios')) $('tile-scenarios').onclick = () => {
+  $('scen-list').innerHTML = SCENARIOS.map((s, i) => `<div class="scen-card" data-scen="${i}"><div><b>${s.title}</b><small>${s.desc}</small></div><button class="primary">Play</button></div>`).join('');
+  $('scenarios-modal').style.display = 'flex';
+};
+if ($('scen-close')) $('scen-close').onclick = () => { $('scenarios-modal').style.display = 'none'; };
+if ($('scen-list')) $('scen-list').onclick = (e) => {
+  const card = e.target.closest('[data-scen]');
+  if (!card) return;
+  const sc = SCENARIOS[Number(card.dataset.scen)];
+  if (!sc) return;
+  $('scenarios-modal').style.display = 'none';
+  hideHome();
+  $('route-modal').style.display = 'none';
+  startRoute(sc.opts);
+  toast(`Mission started: ${sc.title}`, 'ok', 4000);
+};
 if ($('btn-guide')) $('btn-guide').onclick = () => { if (layout && !state.paused) togglePause(true); renderGuide(); $('guide-modal').style.display = 'flex'; };
 $('guide-close').onclick = () => { $('guide-modal').style.display = 'none'; };
 $('guide-drive').onclick = () => { $('guide-modal').style.display = 'none'; if (layout) { togglePause(false); } else { $('tile-drive').click(); } };
@@ -1026,9 +1073,22 @@ setInterval(() => {
   toast({ CLEAR: '☀ The weather is clearing up', HAZE: '🌤 Summer haze building up', MONSOON: '🌧 Monsoon shower ahead — caution orders may follow', FOG: '🌫 Fog rolling in — run on the fog safety device' }[nw], 'ok', 3500);
 }, 1000);
 
-// photo mode: no HUD, free camera, pick the time of day, save a picture
-$('btn-photo').onclick = () => { document.body.classList.add('photo'); $('photo-time').value = Math.round(state.gameMinutes % 1440); };
-$('photo-exit').onclick = () => document.body.classList.remove('photo');
+// photo mode: no HUD, free camera, pick the time of day, save a picture (reverts to previous time + time burnt in photo mode on exit)
+let photoBaseMin = null, photoBurntMin = 0;
+$('btn-photo').onclick = () => {
+  photoBaseMin = state.gameMinutes;
+  photoBurntMin = 0;
+  document.body.classList.add('photo');
+  $('photo-time').value = Math.round(state.gameMinutes % 1440);
+};
+$('photo-exit').onclick = () => {
+  document.body.classList.remove('photo');
+  if (photoBaseMin !== null) {
+    state.gameMinutes = (photoBaseMin + photoBurntMin) % 1440;
+    photoBaseMin = null;
+    photoBurntMin = 0;
+  }
+};
 $('photo-time').oninput = (e) => { state.gameMinutes = Number(e.target.value); };
 $('photo-save').onclick = () => {
   if (pipeline) pipeline.render(); else renderer.render(scene, camera);
@@ -1206,8 +1266,12 @@ $('btn-sub-go').onclick = async () => { if (await mpTakeRoute({ sub: { city: $('
 $('btn-solve').onclick = async () => {
   if (await mpTakeRoute({ src: $('sel-src').value, dst: $('sel-dst').value, via: $('sel-via').value ? $('sel-via').value.split(',').map((x) => x.trim()).filter(Boolean) : [], rakeType: $('sel-rake').value, allStops: $('sel-rake').value === 'DEMU_PASSENGER' })) return;
   const via = $('sel-via').value ? $('sel-via').value.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const loco = $('sel-loco')?.value || null;
+  const cars = $('sel-cars')?.value ? Number($('sel-cars').value) : null;
+  if (loco === 'WAG9' && account.career.xp < 400 && !confirm('WAG-9 unlocks at 400 Career XP (Loco Pilot Goods). Drive it anyway?')) return;
+  if (loco === 'WAG12' && account.career.xp < 1200 && !confirm('WAG-12B unlocks at 1,200 Career XP. Drive it anyway?')) return;
   $('route-modal').style.display = 'none';
-  startRoute({ src: $('sel-src').value, dst: $('sel-dst').value, via, rakeType: $('sel-rake').value, allStops: $('sel-rake').value === 'DEMU_PASSENGER', nightMail: $('chk-night').checked });
+  startRoute({ src: $('sel-src').value, dst: $('sel-dst').value, via, rakeType: $('sel-rake').value, allStops: $('sel-rake').value === 'DEMU_PASSENGER', nightMail: $('chk-night').checked, loco, cars });
 };
 $('sel-roster').onchange = async (e) => {
   const r = state.rosters[Number(e.target.value)];
@@ -1273,6 +1337,7 @@ window.addEventListener('keydown', async (e) => {
     case 'KeyC': rig.setMode(rig.mode + 1); camSel.value = String(rig.mode); break;
     default:
       if (e.code === 'KeyL') toggleLights();
+      if (e.code === 'KeyK') $('btn-cruise')?.click();
       if (e.code === 'KeyP') $('btn-panto').click();
       if (e.code === 'KeyX') toggleReverser();
       if (e.code === 'KeyI') toggleWipers();
@@ -1320,6 +1385,13 @@ function physics(dt, fx = {}) {
       if (dep != null && minDiff(state.gameMinutes, dep) < 0) { state.notch = 0; state.brake = 60; }
     }
   }
+  // Cruise Hold: automatically maintain constant speed
+  if (state.cruiseSpeed !== null && !state.auto && !state.reverseMode) {
+    const err = state.cruiseSpeed - v;
+    if (err > 0.35) { state.notch = Math.min(8, Math.max(1, Math.round(err * 2))); state.brake = 0; }
+    else if (err < -0.35) { state.notch = Math.max(-4, Math.min(-1, Math.round(err * 2))); }
+    else { state.notch = 0; }
+  }
   // Kavach (Automatic Train Protection): brakes for red signals and overspeed
   let brakePct = state.brake;
   state.kavachActive = null;
@@ -1357,7 +1429,7 @@ function physics(dt, fx = {}) {
   const resist = v > 0.01 ? (R.goods ? 0.011 + 0.000014 * v * v : 0.008 + 0.0000085 * v * v) : 0;
   const wet = state.weather === 'MONSOON' ? 0.75 : 1;
   const brk = state.brakeEff * B * (state.emergency ? 1.32 : 1) * wet;
-  const dyn = !state.reverseMode && state.notch < 0 && powerOn ? (-state.notch / 4) * (R.dynBrake || 0) * Math.min(1, v / 4) : 0;
+  const dyn = !state.reverseMode && state.notch < 0 && powerOn ? (-state.notch / 4) * (R.dynBrake || 0.45) * Math.min(1, v / 3) : 0;
   let a = tract - resist - (state.reverseMode ? -grade : grade) - (v > 0.01 ? brk + dyn : 0);
   if (v <= 0.01 && a < 0) a = 0;
   // stalled: full power, standing, and the bank is too steep to start
@@ -1558,7 +1630,7 @@ function handleEvents(events) {
     if (ev.type === 'ready') {
       const dep = timetable.schedDep(st);
       if (dep != null && minDiff(state.gameMinutes, dep) < -0.5) toast(`${st.name}: dwell complete, starter OFF — but booked departure is ${fmtClock(dep)}. Wait for right time (leaving early is penalised).`, 'warn', 6000);
-      else { state.dueShown = st; toast(`${st.name}: right away! Starter signal cleared.`, 'ok'); audio.hornBlip(0.5); }
+      else { state.dueShown = st; toast(`🟢 ${st.name}: Guard & SM All-Right green flag/lamp exchanged — right away! Starter cleared.`, 'ok', 4200); audio.hornBlip(0.5); }
     }
   }
 }
@@ -1684,6 +1756,21 @@ function updateHud(limit) {
   $('strip-done').style.width = `${frac * 100}%`;
   const hh = Math.floor(state.gameMinutes / 60), mm = Math.floor(state.gameMinutes % 60);
   $('clock').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  if (state.radarOn && $('radar-list')) {
+    const nearby = ops.trains()
+      .map((t) => ({ t, ds: t.s - state.sFront }))
+      .filter((x) => Math.abs(x.ds) < 6000)
+      .sort((a, b) => Math.abs(a.ds) - Math.abs(b.ds))
+      .slice(0, 6);
+    $('radar-list').innerHTML = nearby.length
+      ? nearby.map(({ t, ds }) => {
+          const dTxt = Math.abs(ds) >= 1000 ? `${(Math.abs(ds) / 1000).toFixed(1)} km` : `${Math.round(Math.abs(ds))} m`;
+          const dirTxt = ds >= 0 ? 'ahead' : 'behind';
+          const tag = t.kind === 'oncoming' ? 'ONCOMING' : t.kind === 'behind' ? 'OVERTAKING' : t.kind === 'crossing' ? 'CROSSING' : 'AHEAD';
+          return `<div class="radar-row ${t.kind}"><span><b>${t.name || t.consist?.rakeType}</b><br><small class="muted">${tag} · ${Math.round(t.v * 3.6)} km/h</small></span><span style="text-align:right;"><b>${dTxt}</b><br><small class="muted">${dirTxt}</small></span></div>`;
+        }).join('')
+      : '<div class="muted">No AI trains within 6 km</div>';
+  }
 }
 
 let last = performance.now();
@@ -1724,6 +1811,7 @@ renderer.setAnimationLoop(() => {
   const localScale = Math.max(1, (layout.realKmAt(state.sFront + 5) - layout.realKmAt(state.sFront - 5)) * 100);
   const gameDt = (dt * (state.speed > 0.3 ? localScale : 8)) / 60;
   state.gameMinutes = (state.gameMinutes + gameDt) % 1440;
+  if (document.body.classList.contains('photo') && photoBaseMin !== null) photoBurntMin += gameDt;
 
   gameDtLast = gameDt;
   const shunting = state.engineChange?.kind === 'shunt';

@@ -330,6 +330,7 @@
     #speedo.minimized { min-width: 0 !important; width: auto !important; }
     #campad.minimized { grid-template-columns: auto !important; min-width: 0 !important; }
     #campad.minimized > *:not(.min-header) { display: none !important; }
+    #pf-panel.minimized #pf-selected { display: block !important; }
     /* ---- Dynamic control logos ---- */
     #controls button { display: inline-flex; align-items: center; gap: 5px; transition: background .15s, border-color .15s, box-shadow .15s; }
     .ctl-ico { width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -376,8 +377,22 @@
     .guide-item small { font-size: 11px; color: var(--muted); display: block; margin-top: 3px; line-height: 1.35; }
     #guide-detail { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: #0d1626; border: 1px solid #334155; font-size: 12.5px; }
     #auth .card { position: relative; }
+    /* ---- Live Train Radar ---- */
+    #radar-panel { position: fixed; right: 12px; bottom: 118px; width: 280px; max-width: calc(100vw - 24px); display: none; z-index: 13; border-color: #38bdf8; }
+    #radar-panel .title { color: #7dd3fc; font-size: 12.5px; display: flex; justify-content: space-between; align-items: center; }
+    #radar-list { margin-top: 6px; font-size: 11.5px; display: flex; flex-direction: column; gap: 4px; max-height: 170px; overflow-y: auto; }
+    .radar-row { display: flex; justify-content: space-between; gap: 6px; padding: 3px 6px; border-radius: 5px; background: #0f192b; border-left: 3px solid #60a5fa; }
+    .radar-row.oncoming { border-left-color: #f97316; }
+    .radar-row.behind { border-left-color: #ef4444; }
+    .radar-row.ahead { border-left-color: #22c55e; }
+    /* ---- Scenarios modal ---- */
+    #scenarios-modal { position: fixed; inset: 0; z-index: 78; display: none; align-items: center; justify-content: center; background: rgba(2,6,18,.8); }
+    #scenarios-modal .panel { width: 640px; max-width: 94vw; max-height: 85vh; overflow: auto; }
+    .scen-card { background: #111a2b; border: 1px solid #2c3e5a; border-radius: 9px; padding: 10px 12px; margin-top: 8px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .scen-card:hover { border-color: #60a5fa; background: #162540; }
+    .scen-card small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
   </style>
-  <script type="module" crossorigin src="/assets/index-DzAeJR8z.js"></script>
+  <script type="module" crossorigin src="/assets/index-jdRieaGe.js"></script>
 </head>
 <body>
   <div id="auth" role="dialog" aria-modal="true" aria-labelledby="auth-title">
@@ -423,6 +438,7 @@
         <button id="btn-caution" data-i="⚠" title="Caution orders (T.409) in force">Caution</button>
         <button id="btn-photo" data-i="📷" title="Photo mode: hide the HUD, free camera, time of day, save a picture">Photo</button>
         <button id="btn-pause" data-i="⏸" title="Pause / Resume simulation (Esc)">Pause</button>
+        <button id="btn-radar" class="tog" data-i="📡" title="Toggle live section train radar">Radar</button>
         <button id="btn-guide" data-i="📖" title="Open Playing Guide (pauses game)">Guide</button>
         <button id="btn-priority" class="primary" data-i="⚡" title="Request priority at stations/junctions when running >30 min late">Ask Priority</button>
       </div>
@@ -515,7 +531,11 @@
   </div>
 
   <div id="pf-panel" class="panel">
-    <div class="title" id="pf-title">Platform entry</div>
+    <div class="title min-header" style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+      <span id="pf-title">Platform entry</span>
+      <button class="min-btn" id="min-pf" title="Minimize / expand">−</button>
+    </div>
+    <div id="pf-selected" class="muted" style="font-size:11px;margin-top:2px;display:none;color:#86efac;"></div>
     <div class="muted" id="pf-sub" style="margin-top:2px;"></div>
     <div id="pf-list"></div>
     <div id="pf-lock"></div>
@@ -544,7 +564,16 @@
         <div class="tile small" id="tile-stats"><span class="ti">🏆</span><b>Statistics &amp; Top 10</b><small>Daily · weekly · monthly leaderboards</small></div>
         <div class="tile small" id="tile-career"><span class="ti">🎖️</span><b>Career</b><small>Rank, XP and run history</small></div>
         <div class="tile small" id="tile-guide"><span class="ti">📖</span><b>Playing Guide</b><small>Train Simulation buttons, live station overview &amp; controls</small></div>
+        <div class="tile small" id="tile-scenarios"><span class="ti">🎯</span><b>Scenarios &amp; Missions</b><small>Timed challenges: Late Rajdhani, Coal Climb, Godavari Express &amp; Night Mail</small></div>
       </div>
+    </div>
+  </div>
+
+  <div id="scenarios-modal" role="dialog" aria-modal="true" aria-label="Scenarios">
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;margin-top:0;"><div class="title" style="font-size:18px;">🎯 Scenarios &amp; Missions</div><button id="scen-close">Close</button></div>
+      <div class="muted" style="font-size:12px;margin-top:4px;">Pick a curated railway challenge to launch immediately.</div>
+      <div id="scen-list"></div>
     </div>
   </div>
 
@@ -688,6 +717,26 @@
         <option value="BOXN_GOODS">Goods train, 58 wagons (75 km/h)</option>
       </select>
     </div>
+    <div class="row"><span class="muted lbl">Locomotive</span>
+      <select id="sel-loco" style="flex:1;">
+        <option value="">Default for train</option>
+        <option value="WAP7">WAP-7 (Electric, 25 kV · Unlocked)</option>
+        <option value="WDP4D">WDP-4D (Diesel · Unlocked)</option>
+        <option value="WAG9">WAG-9 (Heavy Freight · 400+ XP)</option>
+        <option value="WAG12">WAG-12B (12,000 HP Twin Electric · 1200+ XP)</option>
+      </select>
+    </div>
+    <div class="row"><span class="muted lbl">Consist length</span>
+      <select id="sel-cars" style="flex:1;">
+        <option value="">Default consist</option>
+        <option value="8">8 coaches (Short Express / VB)</option>
+        <option value="12">12 coaches (Standard Express)</option>
+        <option value="18">18 coaches (Long LHB)</option>
+        <option value="22">22 coaches (Full Mail/Express)</option>
+        <option value="40">40 wagons (Medium Freight)</option>
+        <option value="58">58 wagons (Heavy BOXN Freight)</option>
+      </select>
+    </div>
     <div class="row">
       <button class="primary" id="btn-solve">Start journey</button>
       <button id="btn-save">Save this train</button>
@@ -701,6 +750,7 @@
   <div id="co-panel" class="panel" role="dialog" aria-label="Caution order"></div>
   <div id="shunt-panel" class="panel" role="status" aria-live="polite"></div>
   <div id="ctl-panel" class="panel" role="dialog" aria-label="Section control"></div>
+  <div id="radar-panel" class="panel"><div class="title"><span>📡 Live Train Radar</span><button class="min-btn" id="radar-close" title="Close">✕</button></div><div id="radar-list"></div></div>
   <canvas id="dash" width="980" height="190"></canvas>
   <div id="engine-panel" class="panel">
     <div class="title" id="engine-title">Engine change</div>
@@ -812,6 +862,7 @@
       <div class="row">
         <button id="btn-up"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></span><span>Throttle + (W)</span></button>
         <button id="btn-dn"><span class="ctl-ico"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg></span><span>Throttle − (S)</span></button>
+        <button id="btn-cruise" class="tog" title="Hold current constant speed (K)">Cruise (K)</button>
       </div>
       <div class="row" style="margin-top:6px;">
         <button id="btn-brk"><span class="ctl-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></svg></span><span>Brake (Space)</span></button>

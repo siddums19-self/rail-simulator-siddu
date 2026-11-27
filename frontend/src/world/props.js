@@ -257,7 +257,7 @@ export class PropBuilder {
       if (!c.vLimit) continue;
       const cap = layout.lineAt(c.s0) === 'S' ? 100 : 130;
       if (c.vLimit >= cap) continue;
-      for (const [s, text] of [[c.s0 - 40, String(c.vLimit)], [c.s1 + 60, 'T/P']]) {
+      for (const [s, text] of [[c.s0 - 300, 'C/T'], [c.s0 - 40, String(c.vLimit)], [c.s1 + 60, 'T/P']]) {
         if (s < a || s >= b) continue;
         const lat = -(layout.lineAt(s) === 'S' ? 3.9 : 6.6);
         path.pointAt(s, lat, _v);
