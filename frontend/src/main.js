@@ -160,7 +160,7 @@ const state = {
   src: 'GTL', dst: 'SC', via: [], rakeType: 'LHB', allStops: false,
   sFront: 0, speed: 0, notch: 0, brake: 0, emergency: false,
   auto: false, simRate: 2, kavach: true, incident: null, busyStations: true,
-  weather: 'CLEAR', gameMinutes: 7 * 60 + 15, lights: 'auto', wipers: 'auto', derailments: false, scale: Number(localStorageGet('railsim.scale') || 1),
+  weather: 'CLEAR', gameMinutes: 7 * 60 + 15, lights: 'auto', wipers: 'auto', derailments: false, scale: Number(localStorageGet('railsim.scale') || 10),
   backendOnline: false, panto: true, brakeEff: 0, incidentsOn: true,
   paused: false, priorityReqStation: -1, reverseMode: false, cruiseSpeed: null
 };
